@@ -80,6 +80,12 @@ SCAN_TIMEFRAME_MINUTES = 5  # M5
 # Timeframe for the session range calculation
 RANGE_TIMEFRAME_MINUTES = 15  # M15
 
+# SMC: Use Fair Value Gap (FVG) confirmation for entries
+USE_FVG_FILTER = True
+
+# SMC: Minimum size in pips for a valid FVG
+FVG_MIN_SIZE_PIPS = 1.0
+
 # =============================================================================
 # SAFETY / EXECUTION
 # =============================================================================

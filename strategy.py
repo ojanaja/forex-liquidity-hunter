@@ -1,12 +1,12 @@
 """
 Forex Liquidity Hunter - Strategy Module
-Implements the Session Liquidity Sweep strategy.
+Implements the Session Liquidity Sweep strategy with FVG confirmation.
 
 Logic:
   1. Identify the preceding session's High / Low (the "range")
   2. Wait for price to "sweep" beyond that range
-  3. Detect a rejection candle (long wick closing back inside the range)
-  4. Generate a SELL signal (if high was swept) or BUY signal (if low was swept)
+  3. Detect a Market Structure Shift (MSS) / Displacement leaving a Fair Value Gap (FVG)
+  4. Enter the trade when price retraces into the FVG.
 """
 import logging
 from dataclasses import dataclass
@@ -69,12 +69,6 @@ def identify_session_range(
     low = range_df["low"].min()
     mid = (high + low) / 2.0
 
-    logger.debug(
-        f"Session range for {symbol}: "
-        f"H={high:.5f} L={low:.5f} Mid={mid:.5f} "
-        f"({len(range_df)} candles)"
-    )
-
     return {"high": high, "low": low, "mid": mid}
 
 
@@ -86,14 +80,10 @@ def detect_sweep(
     symbol: str,
     session_high: float,
     session_low: float,
-) -> Optional[str]:
+) -> Optional[dict]:
     """
     Check if the current price has pushed beyond the session range.
-
-    Returns:
-      "HIGH_SWEPT" — price went above session high (look for SELL)
-      "LOW_SWEPT"  — price went below session low  (look for BUY)
-      None         — no sweep detected
+    Returns the sweep type and the extreme price reached.
     """
     sym_info = mt5_bridge.get_symbol_info(symbol)
     if sym_info is None:
@@ -102,95 +92,113 @@ def detect_sweep(
     pip_size = sym_info.point * 10 if sym_info.digits in (3, 5) else sym_info.point
     threshold = config.SWEEP_THRESHOLD_PIPS * pip_size
 
-    # Get recent M1 candles to check for sweep
+    # Get recent M1 candles to check for sweep (last 30 mins)
     df = mt5_bridge.get_ohlc(symbol, timeframe_minutes=1, count=30)
     if df is None or df.empty:
         return None
 
-    recent = df.tail(15)  # last 15 minutes
-    recent_high = recent["high"].max()
-    recent_low = recent["low"].min()
+    recent_high = df["high"].max()
+    recent_low = df["low"].min()
 
     if recent_high >= session_high + threshold:
-        logger.info(
-            f"🔴 HIGH SWEPT on {symbol}: "
-            f"recent high {recent_high:.5f} > session high {session_high:.5f} "
-            f"+ {config.SWEEP_THRESHOLD_PIPS} pips"
-        )
-        return "HIGH_SWEPT"
+        return {"type": "HIGH_SWEPT", "extreme": recent_high}
 
     if recent_low <= session_low - threshold:
-        logger.info(
-            f"🟢 LOW SWEPT on {symbol}: "
-            f"recent low {recent_low:.5f} < session low {session_low:.5f} "
-            f"- {config.SWEEP_THRESHOLD_PIPS} pips"
-        )
-        return "LOW_SWEPT"
+        return {"type": "LOW_SWEPT", "extreme": recent_low}
 
     return None
 
 
 # ======================================================================
-# Step 3: Detect Rejection Candle
+# Step 3: FVG and Rejection Detection
 # ======================================================================
 
-def detect_rejection(
+def detect_fvg_entry(
     symbol: str,
-    sweep_direction: str,
+    sweep_data: dict,
 ) -> Optional[dict]:
     """
-    After a sweep, look for a rejection candle on the scan timeframe.
-
-    A rejection candle has:
-      - A long wick on the sweep side (> REJECTION_WICK_RATIO of the candle range)
-      - Body closed back inside the session range
-
-    Returns: {"wick_tip": float, "close": float} or None
+    Look for an FVG forming after the sweep, and check if price is in it.
+    If USE_FVG_FILTER is False, fallback to simple rejection candle.
     """
     df = mt5_bridge.get_ohlc(
         symbol,
         timeframe_minutes=config.SCAN_TIMEFRAME_MINUTES,
-        count=5,
+        count=10, # Look at last 10 candles for FVG
     )
 
-    if df is None or len(df) < 2:
+    if df is None or len(df) < 5:
         return None
 
-    # Check the last completed candle (index -2) and current forming (index -1)
-    for idx in [-2, -1]:
-        candle = df.iloc[idx]
-        o, h, l, c = candle["open"], candle["high"], candle["low"], candle["close"]
-        full_range = h - l
+    sym_info = mt5_bridge.get_symbol_info(symbol)
+    if sym_info is None:
+        return None
+        
+    pip_size = sym_info.point * 10 if sym_info.digits in (3, 5) else sym_info.point
+    min_fvg_size = config.FVG_MIN_SIZE_PIPS * pip_size
 
-        if full_range <= 0:
-            continue
+    current_price = mt5_bridge.get_current_price(symbol)
+    if current_price is None:
+        return None
 
-        body_top = max(o, c)
-        body_bottom = min(o, c)
+    # Fallback to simple rejection if FVG filter is off
+    if not getattr(config, "USE_FVG_FILTER", False):
+        for idx in [-2, -1]:
+            candle = df.iloc[idx]
+            o, h, l, c = candle["open"], candle["high"], candle["low"], candle["close"]
+            full_range = h - l
+            if full_range <= 0:
+                continue
 
-        if sweep_direction == "HIGH_SWEPT":
-            # Looking for bearish rejection — long upper wick
-            upper_wick = h - body_top
-            wick_ratio = upper_wick / full_range
+            if sweep_data["type"] == "HIGH_SWEPT":
+                body_top = max(o, c)
+                wick_ratio = (h - body_top) / full_range
+                if wick_ratio >= config.REJECTION_WICK_RATIO:
+                    logger.info(f"🕯️ Bearish rejection found on {symbol}")
+                    return {"wick_tip": sweep_data["extreme"], "fvg_entry": c}
+            else:
+                body_bottom = min(o, c)
+                wick_ratio = (body_bottom - l) / full_range
+                if wick_ratio >= config.REJECTION_WICK_RATIO:
+                    logger.info(f"🕯️ Bullish rejection found on {symbol}")
+                    return {"wick_tip": sweep_data["extreme"], "fvg_entry": c}
+        return None
 
-            if wick_ratio >= config.REJECTION_WICK_RATIO:
-                logger.info(
-                    f"🕯️ Bearish rejection on {symbol}: "
-                    f"wick_ratio={wick_ratio:.2f}, wick_tip={h:.5f}"
-                )
-                return {"wick_tip": h, "close": c}
 
-        elif sweep_direction == "LOW_SWEPT":
-            # Looking for bullish rejection — long lower wick
-            lower_wick = body_bottom - l
-            wick_ratio = lower_wick / full_range
-
-            if wick_ratio >= config.REJECTION_WICK_RATIO:
-                logger.info(
-                    f"🕯️ Bullish rejection on {symbol}: "
-                    f"wick_ratio={wick_ratio:.2f}, wick_tip={l:.5f}"
-                )
-                return {"wick_tip": l, "close": c}
+    # --- FVG DETECTION ---
+    # We loop backward from the 2nd to last candle to find an FVG
+    # (Candle 0, Candle 1, Candle 2). Gap is between Candle 0 and Candle 2.
+    
+    for i in range(len(df) - 3, 0, -1):
+        c0 = df.iloc[i-1]
+        c1 = df.iloc[i]
+        c2 = df.iloc[i+1]
+        
+        if sweep_data["type"] == "HIGH_SWEPT":
+            # Looking for Bearish FVG: c0's low > c2's high
+            gap = c0["low"] - c2["high"]
+            if gap >= min_fvg_size:
+                fvg_top = c0["low"]
+                fvg_bottom = c2["high"]
+                
+                # Check if current price has retraced into the FVG
+                ask = current_price["ask"]
+                if fvg_bottom <= ask <= fvg_top + (2 * pip_size):
+                    logger.info(f"🎯 Bearish FVG Entry found on {symbol}! Gap size: {gap/pip_size:.1f} pips.")
+                    return {"wick_tip": sweep_data["extreme"], "fvg_entry": ask}
+                    
+        elif sweep_data["type"] == "LOW_SWEPT":
+            # Looking for Bullish FVG: c0's high < c2's low
+            gap = c2["low"] - c0["high"]
+            if gap >= min_fvg_size:
+                fvg_top = c2["low"]
+                fvg_bottom = c0["high"]
+                
+                # Check if current price has retraced into the FVG
+                bid = current_price["bid"]
+                if fvg_bottom - (2 * pip_size) <= bid <= fvg_top:
+                    logger.info(f"🎯 Bullish FVG Entry found on {symbol}! Gap size: {gap/pip_size:.1f} pips.")
+                    return {"wick_tip": sweep_data["extreme"], "fvg_entry": bid}
 
     return None
 
@@ -201,7 +209,7 @@ def detect_rejection(
 
 def generate_signal(symbol: str) -> Optional[Signal]:
     """
-    Full pipeline: range → sweep → rejection → signal.
+    Full pipeline: range → sweep → FVG return → signal.
     Returns a Signal object or None.
     """
     # --- Pre-check: spread ---
@@ -213,10 +221,6 @@ def generate_signal(symbol: str) -> Optional[Signal]:
     spread_pips = (sym_info.spread * sym_info.point) / pip_size
 
     if spread_pips > config.MAX_SPREAD_PIPS:
-        logger.debug(
-            f"Spread too wide on {symbol}: {spread_pips:.1f} pips "
-            f"(max: {config.MAX_SPREAD_PIPS})"
-        )
         return None
 
     # Step 1: Get session range
@@ -225,13 +229,13 @@ def generate_signal(symbol: str) -> Optional[Signal]:
         return None
 
     # Step 2: Check for sweep
-    sweep = detect_sweep(symbol, session["high"], session["low"])
-    if sweep is None:
+    sweep_data = detect_sweep(symbol, session["high"], session["low"])
+    if sweep_data is None:
         return None
 
-    # Step 3: Check for rejection
-    rejection = detect_rejection(symbol, sweep)
-    if rejection is None:
+    # Step 3: Check for FVG / Rejection
+    entry_data = detect_fvg_entry(symbol, sweep_data)
+    if entry_data is None:
         return None
 
     # Step 4: Build the signal
@@ -239,39 +243,30 @@ def generate_signal(symbol: str) -> Optional[Signal]:
     if price is None:
         return None
 
-    if sweep == "HIGH_SWEPT":
+    if sweep_data["type"] == "HIGH_SWEPT":
         # SELL signal
         direction = "SELL"
         entry = price["bid"]
-        sl = rejection["wick_tip"] + (config.SL_BUFFER_PIPS * pip_size)
+        sl = entry_data["wick_tip"] + (config.SL_BUFFER_PIPS * pip_size)
         sl_distance = sl - entry
         sl_pips = sl_distance / pip_size
         tp = entry - (sl_distance * config.TP_RATIO)
 
-        reason = (
-            f"Session HIGH swept ({session['high']:.5f}), "
-            f"bearish rejection at {rejection['wick_tip']:.5f}"
-        )
+        reason = f"Session HIGH swept, FVG reentry at {entry:.5f}"
 
     else:  # LOW_SWEPT
         # BUY signal
         direction = "BUY"
         entry = price["ask"]
-        sl = rejection["wick_tip"] - (config.SL_BUFFER_PIPS * pip_size)
+        sl = entry_data["wick_tip"] - (config.SL_BUFFER_PIPS * pip_size)
         sl_distance = entry - sl
         sl_pips = sl_distance / pip_size
         tp = entry + (sl_distance * config.TP_RATIO)
 
-        reason = (
-            f"Session LOW swept ({session['low']:.5f}), "
-            f"bullish rejection at {rejection['wick_tip']:.5f}"
-        )
+        reason = f"Session LOW swept, FVG reentry at {entry:.5f}"
 
-    # Validate SL distance is reasonable (at least 3 pips, max 20 pips)
-    if sl_pips < 3.0 or sl_pips > 20.0:
-        logger.info(
-            f"SL distance out of range for {symbol}: {sl_pips:.1f} pips. Skipping."
-        )
+    # Validate SL distance is reasonable (at least 3 pips, max 30 pips for FVG)
+    if sl_pips < 3.0 or sl_pips > 30.0:
         return None
 
     signal = Signal(
