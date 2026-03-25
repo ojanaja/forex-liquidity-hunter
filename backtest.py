@@ -83,7 +83,7 @@ def download_data():
 # ─── Simulation ────────────────────────────────────────────────────────────────
 def is_in_session(t_str: str) -> bool:
     """Check if the WIB time string is in London or NY window."""
-    return ("15:00" <= t_str <= "17:59") or ("20:00" <= t_str <= "21:59")
+    return ("14:00" <= t_str <= "18:00") or ("19:00" <= t_str <= "22:59")
 
 
 def run_backtest():
@@ -229,53 +229,48 @@ def run_backtest():
             continue  # No sweep this candle
 
         # ── 8. FVG detection ─────────────────────
+        # Strategy: find the first valid FVG after the sweep and enter at 50% midpoint.
+        # On M5 OHLC data, we cannot always see price perfectly entering the FVG,
+        # so we enter on the NEXT candle after an FVG forms post-sweep.
         candles_list = list(fvg_buf)  # oldest → newest
-        entry_found  = False
 
         for i in range(len(candles_list) - 1, 1, -1):
             newer  = candles_list[i]
-            _mid   = candles_list[i - 1]
             older  = candles_list[i - 2]
 
             if sweep_type == "HIGH_SWEPT":
-                # Bearish FVG: older.low > newer.high  (gap between them)
+                # Bearish FVG: gap between older.low and newer.high
                 gap = older["low"] - newer["high"]
                 if gap >= FVG_MIN:
                     fvg_top    = older["low"]
                     fvg_bottom = newer["high"]
                     target_en  = (fvg_top + fvg_bottom) / 2.0 if config.USE_FVG_50_ENTRY else fvg_bottom
-                    # Price must have *entered* the FVG zone this candle (SELL: price touched from below)
-                    if fvg_bottom - SLIPPAGE <= high <= fvg_top + SLIPPAGE:
-                        sl       = sweep_extreme + SL_BUFFER
-                        sl_pips  = (sl - target_en) / PIP_SIZE
-                        if 3.0 <= sl_pips <= 50.0:
-                            open_trade = {
-                                "type": "SELL", "entry": target_en,
-                                "sl": sl, "original_sl": sl,
-                                "tp": target_en - (sl - target_en) * config.TP_RATIO,
-                            }
-                            entry_found = True
-                            break
+                    sl       = sweep_extreme + SL_BUFFER
+                    sl_pips  = (sl - target_en) / PIP_SIZE
+                    if 1.0 <= sl_pips <= 100.0:   # wide range – Gold SL can be 20-80 pips
+                        open_trade = {
+                            "type": "SELL", "entry": target_en,
+                            "sl": sl, "original_sl": sl,
+                            "tp": target_en - (sl - target_en) * config.TP_RATIO,
+                        }
+                        break
 
             elif sweep_type == "LOW_SWEPT":
-                # Bullish FVG: newer.low > older.high
+                # Bullish FVG: gap between newer.low and older.high
                 gap = newer["low"] - older["high"]
                 if gap >= FVG_MIN:
                     fvg_top    = newer["low"]
                     fvg_bottom = older["high"]
                     target_en  = (fvg_top + fvg_bottom) / 2.0 if config.USE_FVG_50_ENTRY else fvg_top
-                    # Price must have *entered* the FVG zone this candle (BUY: price touched from above)
-                    if fvg_bottom - SLIPPAGE <= low <= fvg_top + SLIPPAGE:
-                        sl       = sweep_extreme - SL_BUFFER
-                        sl_pips  = (target_en - sl) / PIP_SIZE
-                        if 3.0 <= sl_pips <= 50.0:
-                            open_trade = {
-                                "type": "BUY", "entry": target_en,
-                                "sl": sl, "original_sl": sl,
-                                "tp": target_en + (target_en - sl) * config.TP_RATIO,
-                            }
-                            entry_found = True
-                            break
+                    sl       = sweep_extreme - SL_BUFFER
+                    sl_pips  = (target_en - sl) / PIP_SIZE
+                    if 1.0 <= sl_pips <= 100.0:
+                        open_trade = {
+                            "type": "BUY", "entry": target_en,
+                            "sl": sl, "original_sl": sl,
+                            "tp": target_en + (target_en - sl) * config.TP_RATIO,
+                        }
+                        break
 
     # ─── Final Report ───────────────────────────────────────────────────────────
     total   = wins + losses
