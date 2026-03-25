@@ -87,6 +87,7 @@ def run_backtest():
     session_low = None
     sweep_direction = None  # "UP" or "DOWN"
     sweep_extreme = None
+    recent_candles = []
     
     wib_tz = pytz.timezone("Asia/Jakarta")
     
@@ -103,6 +104,11 @@ def run_backtest():
         local_time = dt + timedelta(hours=5)
         day_str = local_time.strftime("%Y-%m-%d")
         
+        # Keep track of recent candles for FVG check (last 10)
+        recent_candles.append({"high": row["high"], "low": row["low"], "open": row["open"], "close": row["close"]})
+        if len(recent_candles) > 10:
+            recent_candles.pop(0)
+            
         # Reset daily limits
         if day_str != current_day:
             current_day = day_str
@@ -204,11 +210,54 @@ def run_backtest():
                     sweep_extreme = row["low"]
                     
             # 3. FVG Formation after sweep
-            if sweep_direction == "UP":  # Look for Bearish FVG to SELL
-                # Simplified: if current row closes lower, check previous candles structurally
-                # For pure historical backtest without looking back via loc, we simulate pseudo entries
-                # We'll assume a 30% chance an FVG forms after a sweep for the simulation report
-                pass
+            if sweep_direction is not None and len(recent_candles) >= 3:
+                # Loop backward from 2nd to last candle to find an FVG
+                for i in range(len(recent_candles) - 3, -1, -1):
+                    c0 = recent_candles[i+2]
+                    c1 = recent_candles[i+1]
+                    c2 = recent_candles[i]
+                    
+                    if sweep_direction == "UP":
+                        gap = c0["low"] - c2["high"]
+                        if gap >= config.FVG_MIN_SIZE_PIPS * pip_size:
+                            fvg_top = c0["low"]
+                            fvg_bottom = c2["high"]
+                            target_en = fvg_bottom
+                            if getattr(config, "USE_FVG_50_ENTRY", False):
+                                target_en = (fvg_top + fvg_bottom) / 2.0
+                                
+                            if target_en <= row["high"] <= fvg_top + (2 * pip_size):
+                                sl = sweep_extreme + (config.SL_BUFFER_PIPS * pip_size)
+                                sl_pips = (sl - target_en) / pip_size
+                                if 3.0 <= sl_pips <= 30.0:
+                                    open_trade = {
+                                        "type": "SELL", "entry": target_en, "sl": sl, "original_sl": sl,
+                                        "tp": target_en - ((sl - target_en) * config.TP_RATIO)
+                                    }
+                                    sweep_direction = None
+                                    sweep_extreme = None
+                                    break # FVG found and entered
+                                    
+                    elif sweep_direction == "DOWN":
+                        gap = c2["low"] - c0["high"]
+                        if gap >= config.FVG_MIN_SIZE_PIPS * pip_size:
+                            fvg_top = c2["low"]
+                            fvg_bottom = c0["high"]
+                            target_en = fvg_top
+                            if getattr(config, "USE_FVG_50_ENTRY", False):
+                                target_en = (fvg_top + fvg_bottom) / 2.0
+                                
+                            if fvg_bottom - (2 * pip_size) <= row["low"] <= target_en:
+                                sl = sweep_extreme - (config.SL_BUFFER_PIPS * pip_size)
+                                sl_pips = (target_en - sl) / pip_size
+                                if 3.0 <= sl_pips <= 30.0:
+                                    open_trade = {
+                                        "type": "BUY", "entry": target_en, "sl": sl, "original_sl": sl,
+                                        "tp": target_en + ((target_en - sl) * config.TP_RATIO)
+                                    }
+                                    sweep_direction = None
+                                    sweep_extreme = None
+                                    break
                 
     # --- Final Report ---
     total_trades = wins + losses
