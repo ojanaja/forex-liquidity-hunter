@@ -57,6 +57,7 @@ SYMBOLS = [
     "USDJPY",
     "EURJPY",
     "GBPJPY",
+    "XAUUSD",   # Gold is highly volatile, ensure MAX_SPREAD_PIPS accommodates it
 ]
 
 # =============================================================================
