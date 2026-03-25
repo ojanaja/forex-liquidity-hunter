@@ -94,8 +94,9 @@ def run_backtest():
     
     logger.info("⏳ Running simulation loop... This might take a few seconds.")
     
-    sym_info_point = 0.001 if "JPY" in SYMBOL else 0.01  # Gold is 0.01 or 0.001 typically. Let's assume Gold point is 0.01
-    pip_size = sym_info_point * 10
+    # Accurate pip_size for Gold (XAUUSDx is usually 2 or 3 digits. Pip size is 0.01)
+    pip_size = 0.01 if "XAUUSD" in SYMBOL else 0.0001
+    if "JPY" in SYMBOL: pip_size = 0.01
     
     # We will use iterrows for simplicity, though vectorization is faster
     for dt, row in df.iterrows():
@@ -198,70 +199,73 @@ def run_backtest():
         t_str = local_time.strftime("%H:%M")
         
         # 2. Sweep detection during active windows
-        in_window = ("15:00" <= t_str <= "17:00") or ("20:00" <= t_str <= "22:00")
-        if in_window and len(range_candles) >= 96:
+        in_window = ("15:00" <= t_str <= "18:00") or ("20:00" <= t_str <= "23:00")
+        if in_window and len(range_candles) >= 96 and len(recent_candles) >= 10:
             
-            # The range is the last 95 candles (excluding the current one)
+            # The range is the last 95 candles BEFORE the current M5 candle
             session_high = max(c["high"] for c in range_candles[:-1])
             session_low = min(c["low"] for c in range_candles[:-1])
             
-            # Detect sweep against the current row
-            if sweep_direction is None:
-                if row["high"] > session_high + (config.SWEEP_THRESHOLD_PIPS * pip_size):
-                    sweep_direction = "UP"
-                    sweep_extreme = row["high"]
-                elif row["low"] < session_low - (config.SWEEP_THRESHOLD_PIPS * pip_size):
-                    sweep_direction = "DOWN"
-                    sweep_extreme = row["low"]
+            # Step 1: Detect sweep in the recent price action (last 30 mins = 6 candles)
+            # This perfectly replicates `detect_sweep` passing M1 last 30mins.
+            last_30m_high = max(c["high"] for c in recent_candles[-6:])
+            last_30m_low = min(c["low"] for c in recent_candles[-6:])
+            
+            sweep_data = None
+            if last_30m_high >= session_high + (config.SWEEP_THRESHOLD_PIPS * pip_size):
+                sweep_data = {"type": "HIGH_SWEPT", "extreme": last_30m_high}
+            elif last_30m_low <= session_low - (config.SWEEP_THRESHOLD_PIPS * pip_size):
+                sweep_data = {"type": "LOW_SWEPT", "extreme": last_30m_low}
+                
+            # Step 2: FVG Detection
+            if sweep_data is not None:
+                # We need 3 closed candles. recent_candles[-1] is the current forming candle.
+                for i in range(len(recent_candles) - 2, 1, -1):
+                    newer_closed = recent_candles[i]
+                    middle = recent_candles[i-1]
+                    older = recent_candles[i-2]
                     
-            # 3. FVG Formation after sweep
-            if sweep_direction is not None and len(recent_candles) >= 3:
-                # Loop backward from 2nd to last candle to find an FVG
-                for i in range(len(recent_candles) - 3, -1, -1):
-                    c0 = recent_candles[i+2]
-                    c1 = recent_candles[i+1]
-                    c2 = recent_candles[i]
-                    
-                    if sweep_direction == "UP":
-                        gap = c0["low"] - c2["high"]
+                    if sweep_data["type"] == "HIGH_SWEPT":
+                        # Bearish FVG: older low > newer_closed high
+                        gap = older["low"] - newer_closed["high"]
                         if gap >= config.FVG_MIN_SIZE_PIPS * pip_size:
-                            fvg_top = c0["low"]
-                            fvg_bottom = c2["high"]
+                            fvg_top = older["low"]
+                            fvg_bottom = newer_closed["high"]
                             target_en = fvg_bottom
+                            
                             if getattr(config, "USE_FVG_50_ENTRY", False):
                                 target_en = (fvg_top + fvg_bottom) / 2.0
                                 
+                            # Did CURRENT candle (row) retrace to entry ON THIS ROW?
                             if target_en <= row["high"] <= fvg_top + (2 * pip_size):
-                                sl = sweep_extreme + (config.SL_BUFFER_PIPS * pip_size)
+                                sl = sweep_data["extreme"] + (config.SL_BUFFER_PIPS * pip_size)
                                 sl_pips = (sl - target_en) / pip_size
                                 if 3.0 <= sl_pips <= 30.0:
-                                    open_trade = {
+                                    open_trade = { # SELL
                                         "type": "SELL", "entry": target_en, "sl": sl, "original_sl": sl,
                                         "tp": target_en - ((sl - target_en) * config.TP_RATIO)
                                     }
-                                    sweep_direction = None
-                                    sweep_extreme = None
-                                    break # FVG found and entered
+                                    break
                                     
-                    elif sweep_direction == "DOWN":
-                        gap = c2["low"] - c0["high"]
+                    elif sweep_data["type"] == "LOW_SWEPT":
+                        # Bullish FVG: newer_closed low > older high
+                        gap = newer_closed["low"] - older["high"]
                         if gap >= config.FVG_MIN_SIZE_PIPS * pip_size:
-                            fvg_top = c2["low"]
-                            fvg_bottom = c0["high"]
+                            fvg_top = newer_closed["low"]
+                            fvg_bottom = older["high"]
                             target_en = fvg_top
+                            
                             if getattr(config, "USE_FVG_50_ENTRY", False):
                                 target_en = (fvg_top + fvg_bottom) / 2.0
                                 
                             if fvg_bottom - (2 * pip_size) <= row["low"] <= target_en:
-                                sl = sweep_extreme - (config.SL_BUFFER_PIPS * pip_size)
+                                sl = sweep_data["extreme"] - (config.SL_BUFFER_PIPS * pip_size)
                                 sl_pips = (target_en - sl) / pip_size
                                 if 3.0 <= sl_pips <= 30.0:
-                                    open_trade = {
+                                    open_trade = { # BUY
                                         "type": "BUY", "entry": target_en, "sl": sl, "original_sl": sl,
                                         "tp": target_en + ((target_en - sl) * config.TP_RATIO)
                                     }
-                                    sweep_direction = None
-                                    sweep_extreme = None
                                     break
                 
     # --- Final Report ---
