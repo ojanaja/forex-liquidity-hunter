@@ -116,6 +116,7 @@ def main():
 
     last_summary_time = time.time()
     signals_today = 0
+    _symbol_cooldowns: dict[str, float] = {}  # Tracks last trade time per symbol
 
     try:
         logger.info(
@@ -146,10 +147,23 @@ def main():
                 continue
 
             # --- Scan each symbol for signals ---
+            open_positions = mt5_bridge.get_open_positions()
+            open_symbols = [p.symbol for p in open_positions]
+
             for symbol in config.SYMBOLS:
                 # Double-check risk before each symbol
                 if not risk.can_trade():
                     break
+
+                # 1. Do we already have an open trade for this symbol?
+                if symbol in open_symbols:
+                    continue
+
+                # 2. Is this symbol on cooldown?
+                last_trade_time = _symbol_cooldowns.get(symbol, 0)
+                cooldown_seconds = getattr(config, "TRADE_COOLDOWN_MINUTES", 15) * 60
+                if time.time() - last_trade_time < cooldown_seconds:
+                    continue
 
                 signal = generate_signal(symbol)
 
@@ -174,6 +188,7 @@ def main():
 
                 if ticket is not None:
                     signals_today += 1
+                    _symbol_cooldowns[symbol] = time.time()
                     logger.info(
                         f"📈 Trade #{signals_today} placed: "
                         f"{signal.direction} {lot_size} {symbol} "
