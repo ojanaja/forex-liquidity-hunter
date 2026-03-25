@@ -204,12 +204,55 @@ def detect_fvg_entry(
 
 
 # ======================================================================
-# Step 4: Generate Signal
+# Step 4: HTF Trend Filter
+# ======================================================================
+
+def check_htf_bias(symbol: str) -> Optional[str]:
+    """
+    Check the Higher Timeframe (HTF) trend direction using EMA.
+    Returns: 'BULLISH', 'BEARISH', or None.
+    """
+    if not getattr(config, "USE_HTF_FILTER", False):
+        return "NEUTRAL"
+        
+    df = mt5_bridge.get_ohlc(
+        symbol,
+        timeframe_minutes=getattr(config, "HTF_TIMEFRAME_MINUTES", 60),
+        count=getattr(config, "HTF_EMA_PERIOD", 20) + 5,
+    )
+    
+    if df is None or df.empty:
+        return None
+        
+    period = getattr(config, "HTF_EMA_PERIOD", 20)
+    if len(df) < period:
+        return None
+        
+    # Calculate EMA
+    df['ema'] = df['close'].ewm(span=period, adjust=False).mean()
+    
+    current_price = mt5_bridge.get_current_price(symbol)
+    if current_price is None:
+        return None
+        
+    last_ema = df['ema'].iloc[-1]
+    
+    # Simple check: price relative to EMA
+    if current_price['ask'] > last_ema:
+        return "BULLISH"
+    elif current_price['bid'] < last_ema:
+        return "BEARISH"
+        
+    return "NEUTRAL"
+
+
+# ======================================================================
+# Step 5: Generate Signal
 # ======================================================================
 
 def generate_signal(symbol: str) -> Optional[Signal]:
     """
-    Full pipeline: range → sweep → FVG return → signal.
+    Full pipeline: HTF Bias → range → sweep → FVG return → signal.
     Returns a Signal object or None.
     """
     # --- Pre-check: spread ---
@@ -223,17 +266,30 @@ def generate_signal(symbol: str) -> Optional[Signal]:
     if spread_pips > config.MAX_SPREAD_PIPS:
         return None
 
-    # Step 1: Get session range
+    # Step 1: HTF Bias Filter
+    htf_bias = check_htf_bias(symbol)
+    if htf_bias is None:
+        return None
+
+    # Step 2: Get session range
     session = identify_session_range(symbol)
     if session is None:
         return None
 
-    # Step 2: Check for sweep
+    # Step 3: Check for sweep
     sweep_data = detect_sweep(symbol, session["high"], session["low"])
     if sweep_data is None:
         return None
 
-    # Step 3: Check for FVG / Rejection
+    # --- Apply HTF Filter against Sweep ---
+    if sweep_data["type"] == "HIGH_SWEPT" and htf_bias == "BULLISH":
+        # High Swept means we want to SELL, but trend is BULLISH -> Skip
+        return None
+    if sweep_data["type"] == "LOW_SWEPT" and htf_bias == "BEARISH":
+        # Low Swept means we want to BUY, but trend is BEARISH -> Skip
+        return None
+
+    # Step 4: Check for FVG / Rejection
     entry_data = detect_fvg_entry(symbol, sweep_data)
     if entry_data is None:
         return None

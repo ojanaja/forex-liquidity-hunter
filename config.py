@@ -87,6 +87,19 @@ USE_FVG_FILTER = True
 FVG_MIN_SIZE_PIPS = 1.0
 
 # =============================================================================
+# HIGHER TIMEFRAME (HTF) TREND FILTER
+# =============================================================================
+USE_HTF_FILTER = True
+
+# The timeframe to check for the overall trend (e.g., H1 = 60 minutes)
+HTF_TIMEFRAME_MINUTES = 60
+
+# The period of the Exponential Moving Average (EMA) to determine trend direction
+# Price above EMA = Bullish bias (Only look for buys)
+# Price below EMA = Bearish bias (Only look for sells)
+HTF_EMA_PERIOD = 20
+
+# =============================================================================
 # SAFETY / EXECUTION
 # =============================================================================
 
