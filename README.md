@@ -108,6 +108,46 @@ All parameters are in `config.py`. Key settings:
   - Total loss limit is hit
   - An unexpected error occurs
 
+## ☁️ VPS Deployment (Running 24/7)
+
+To run this bot 24/7 without leaving your laptop on, you need a **Windows VPS** (Linux will not work because the MetaTrader5 Python library requires the actual Windows MT5 terminal to be installed).
+
+### 1. Choose a VPS Provider
+Purchase a **Windows Server** VPS. Recommended specs:
+- **OS**: Windows Server 2019 or 2022 (or Windows 10/11)
+- **RAM**: Minimum 2 GB (4 GB recommended for MT5 + Python)
+- **VCPU**: 2+ Cores
+
+*Providers like Contabo, Vultr, or ForexVPS offer cheap Windows servers (~$10-15/month).*
+
+### 2. Initial Setup
+1. Connect to your VPS using **Remote Desktop Connection (RDP)** from your Mac or Windows PC.
+2. Inside the VPS, download and install:
+   - **Google Chrome** (optional, makes browsing easier)
+   - **Python 3.11+** (Make sure to check the box: *"Add python.exe to PATH"*)
+   - **Git for Windows** (To download your code)
+   - **MetaTrader 5** (From the WeMasterTrade portal)
+
+### 3. Deploy the Bot
+1. Open Command Prompt (`cmd`) or PowerShell on the VPS.
+2. Clone your repository:
+   ```cmd
+   git clone https://github.com/YOUR_USERNAME/forex-liquidity-hunter.git
+   cd forex-liquidity-hunter
+   ```
+3. Install dependencies:
+   ```cmd
+   pip install -r requirements.txt
+   ```
+4. Create the `.env` file just like you did on your laptop.
+
+### 4. Run the Bot
+Keep MT5 open and logged into your WeMasterTrade account. Then run:
+```cmd
+python main.py
+```
+*You can now close the Remote Desktop window and disconnect from the VPS. The bot will keep running seamlessly in the cloud!*
+
 ## License
 
 Private use only. Not financial advice.
