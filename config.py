@@ -113,6 +113,9 @@ MAX_OPEN_TRADES = 2
 # Max allowed spread in pips (skip trade if spread is wider)
 MAX_SPREAD_PIPS = 2.0
 
+# Cooldown to prevent rapid consecutive trades on the same symbol (in minutes)
+TRADE_COOLDOWN_MINUTES = 15
+
 # How often to check for signals (seconds)
 SCAN_INTERVAL_SECONDS = 15
 
