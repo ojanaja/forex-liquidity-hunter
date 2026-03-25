@@ -88,6 +88,7 @@ def run_backtest():
     sweep_direction = None  # "UP" or "DOWN"
     sweep_extreme = None
     recent_candles = []
+    range_candles = []
     
     wib_tz = pytz.timezone("Asia/Jakarta")
     
@@ -108,6 +109,11 @@ def run_backtest():
         recent_candles.append({"high": row["high"], "low": row["low"], "open": row["open"], "close": row["close"]})
         if len(recent_candles) > 10:
             recent_candles.pop(0)
+            
+        # Keep track of last 8 hours (96 M5 candles) for Session Range
+        range_candles.append({"high": row["high"], "low": row["low"]})
+        if len(range_candles) > 96:
+            range_candles.pop(0)
             
         # Reset daily limits
         if day_str != current_day:
@@ -188,19 +194,18 @@ def run_backtest():
             continue  # Only 1 trade at a time allowed
             
             
-        # --- Signal Generation (Simplified for Speed) ---
+        # --- Signal Generation ---
         t_str = local_time.strftime("%H:%M")
         
-        # 1. Asian Range formation (approximate)
-        if "00:00" <= t_str <= "08:00":
-            if session_high is None or row["high"] > session_high: session_high = row["high"]
-            if session_low is None or row["low"] < session_low: session_low = row["low"]
-            
         # 2. Sweep detection during active windows
         in_window = ("15:00" <= t_str <= "17:00") or ("20:00" <= t_str <= "22:00")
-        if in_window and session_high and session_low:
+        if in_window and len(range_candles) >= 96:
             
-            # Detect sweep
+            # The range is the last 95 candles (excluding the current one)
+            session_high = max(c["high"] for c in range_candles[:-1])
+            session_low = min(c["low"] for c in range_candles[:-1])
+            
+            # Detect sweep against the current row
             if sweep_direction is None:
                 if row["high"] > session_high + (config.SWEEP_THRESHOLD_PIPS * pip_size):
                     sweep_direction = "UP"
