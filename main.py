@@ -148,6 +148,10 @@ def main():
 
             # --- Scan each symbol for signals ---
             open_positions = mt5_bridge.get_open_positions()
+            
+            # --- Auto Break-Even Manager ---
+            _manage_auto_break_even(open_positions)
+            
             open_symbols = [p.symbol for p in open_positions]
 
             for symbol in config.SYMBOLS:
@@ -253,6 +257,53 @@ def _sync_closed_trades(risk: RiskManager):
 
         if abs(net_profit) > 0.001:  # Skip zero-profit balance ops
             risk.record_trade(net_profit, deal.get("symbol", ""))
+
+
+# ======================================================================
+# Auto Break-Even Manager
+# ======================================================================
+
+def _manage_auto_break_even(open_positions):
+    """
+    Checks all open positions. If profit exceeds the risk threshold (e.g., 1R),
+    moves the Stop Loss to the original Entry Price.
+    """
+    if not getattr(config, "AUTO_BREAK_EVEN", False):
+        return
+
+    ratio_threshold = getattr(config, "BE_ACTIVATION_RATIO", 1.0)
+    
+    for p in open_positions:
+        # If SL is already at or past entry, we don't need to break even
+        if p.type == 0 and p.sl >= p.price_open:  # BUY
+            continue
+        if p.type == 1 and p.sl > 0 and p.sl <= p.price_open:  # SELL
+            continue
+
+        price = mt5_bridge.get_current_price(p.symbol)
+        if price is None:
+            continue
+
+        # Calculate 1R distance (Entry to original SL)
+        risk_distance = abs(p.price_open - p.sl)
+        
+        # Avoid division by zero if SL is exactly at entry (should be caught above)
+        if risk_distance < 0.00001:
+            continue
+            
+        if p.type == 0:  # BUY
+            current_profit_dist = price['bid'] - p.price_open
+            rr_achieved = current_profit_dist / risk_distance
+            
+            if rr_achieved >= ratio_threshold:
+                mt5_bridge.modify_position_sl(p.ticket, p.price_open)
+                
+        else:  # SELL
+            current_profit_dist = p.price_open - price['ask']
+            rr_achieved = current_profit_dist / risk_distance
+            
+            if rr_achieved >= ratio_threshold:
+                mt5_bridge.modify_position_sl(p.ticket, p.price_open)
 
 
 # ======================================================================

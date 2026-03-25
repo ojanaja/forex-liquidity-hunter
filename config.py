@@ -69,8 +69,8 @@ SWEEP_THRESHOLD_PIPS = 3.0
 # Min wick-to-body ratio for a rejection candle (0.6 = wick is 60%+ of range)
 REJECTION_WICK_RATIO = 0.6
 
-# Risk/Reward ratio (1:1.5 default)
-TP_RATIO = 1.5
+# Risk/Reward ratio (we aim for 3.0 RR with tighter FVG 50% entries)
+TP_RATIO = 3.0
 
 # Extra buffer pips added to SL beyond the rejection wick
 SL_BUFFER_PIPS = 2.0
@@ -81,11 +81,24 @@ SCAN_TIMEFRAME_MINUTES = 5  # M5
 # Timeframe for the session range calculation
 RANGE_TIMEFRAME_MINUTES = 15  # M15
 
-# SMC: Use Fair Value Gap (FVG) confirmation for entries
+# =============================================================================
+# SMART MONEY CONCEPTS (SMC) ENTRY PARAMETERS
+# =============================================================================
+
+# Use Fair Value Gap (FVG) confirmation for entries
 USE_FVG_FILTER = True
 
-# SMC: Minimum size in pips for a valid FVG
+# Minimum size in pips for a valid FVG
 FVG_MIN_SIZE_PIPS = 1.0
+
+# Consequent Encroachment: enter only at 50% midpoint of the FVG (tightens SL)
+USE_FVG_50_ENTRY = True
+
+# Auto Break-Even Manager: Move SL to Entry if price goes in our favor
+AUTO_BREAK_EVEN = True
+
+# At what RR threshold should we move SL to Break Even? (1.0 = 1R profit)
+BE_ACTIVATION_RATIO = 1.0
 
 # =============================================================================
 # HIGHER TIMEFRAME (HTF) TREND FILTER

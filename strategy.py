@@ -183,7 +183,12 @@ def detect_fvg_entry(
                 
                 # Check if current price has retraced into the FVG
                 ask = current_price["ask"]
-                if fvg_bottom <= ask <= fvg_top + (2 * pip_size):
+                
+                target_entry = fvg_bottom
+                if getattr(config, "USE_FVG_50_ENTRY", False):
+                    target_entry = (fvg_top + fvg_bottom) / 2.0
+                    
+                if target_entry <= ask <= fvg_top + (2 * pip_size):
                     logger.info(f"🎯 Bearish FVG Entry found on {symbol}! Gap size: {gap/pip_size:.1f} pips.")
                     return {"wick_tip": sweep_data["extreme"], "fvg_entry": ask}
                     
@@ -196,7 +201,12 @@ def detect_fvg_entry(
                 
                 # Check if current price has retraced into the FVG
                 bid = current_price["bid"]
-                if fvg_bottom - (2 * pip_size) <= bid <= fvg_top:
+                
+                target_entry = fvg_top
+                if getattr(config, "USE_FVG_50_ENTRY", False):
+                    target_entry = (fvg_top + fvg_bottom) / 2.0
+                    
+                if fvg_bottom - (2 * pip_size) <= bid <= target_entry:
                     logger.info(f"🎯 Bullish FVG Entry found on {symbol}! Gap size: {gap/pip_size:.1f} pips.")
                     return {"wick_tip": sweep_data["extreme"], "fvg_entry": bid}
 

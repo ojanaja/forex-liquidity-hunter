@@ -280,6 +280,43 @@ def place_order(
 # Position Management
 # ===========================================================================
 
+def modify_position_sl(ticket: int, new_sl: float) -> bool:
+    """Modifies the Stop Loss of an existing open position."""
+    if config.DRY_RUN:
+        logger.info(f"[DRY_RUN] Modify ticket {ticket} SL to {new_sl:.5f}")
+        return True
+
+    if not MT5_AVAILABLE:
+        return False
+
+    pos = mt5.positions_get(ticket=ticket)
+    if pos is None or len(pos) == 0:
+        return False
+
+    p = pos[0]
+    
+    # Don't modify if it's already exactly the same
+    if abs(p.sl - new_sl) < 0.00001:
+        return True
+
+    request = {
+        "action": mt5.TRADE_ACTION_SLTP,
+        "position": ticket,
+        "symbol": p.symbol,
+        "sl": new_sl,
+        "tp": p.tp,
+    }
+
+    result = mt5.order_send(request)
+    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+        logger.info(f"🛡️ Auto Break-Even: Moved ticket {ticket} SL to {new_sl:.5f}")
+        return True
+
+    err = result.comment if result else "Unknown error"
+    logger.error(f"Failed to move SL for ticket {ticket}: {err}")
+    return False
+
+
 def get_open_positions() -> list[Position]:
     """Return all currently open positions."""
     if not MT5_AVAILABLE:
