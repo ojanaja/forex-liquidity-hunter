@@ -1,6 +1,7 @@
 """
-Forex Liquidity Hunter - Historical Backtester v4
+Forex Liquidity Hunter - Historical Backtester v4.1
 Matches strategy.py perfectly: 24h range, HTF EMA filter, and specific Gold fix.
+Includes diagnostic counters to identify where filters are blocking trades.
 """
 import logging
 from collections import deque
@@ -69,7 +70,7 @@ def run_backtest():
     # Calculate HTF EMA (H1 20 EMA)
     df_h1['ema'] = df_h1['close'].ewm(span=config.HTF_EMA_PERIOD, adjust=False).mean()
 
-    # State
+    # State variables
     balance = INITIAL_BALANCE
     watermark = INITIAL_BALANCE
     max_dd = 0.0
@@ -81,11 +82,26 @@ def run_backtest():
     range_buf = deque(maxlen=288) # 24 hours of M5 = 288 candles
     fvg_buf   = deque(maxlen=12)  # last 1 hour
     
+    # Diagnostic counters
+    c_session = 0
+    c_bias = 0
+    c_sweep = 0
+    c_fvg = 0
+
     logger.info("⏳ Running accurate simulation...")
+    
+    # Print sample timestamps for timezone verification
+    sample_rows = df_m5.head(5)
+    print("\n--- Timezone Diagnostic (First 5 candles) ---")
+    for ts, row in sample_rows.iterrows():
+        wib = ts + timedelta(hours=BROKER_TO_WIB)
+        print(f"Broker: {ts.strftime('%H:%M')} -> WIB: {wib.strftime('%H:%M')}")
+    print("--------------------------------------------\n")
 
     for ts, row in df_m5.iterrows():
         h, l = float(row["high"]), float(row["low"])
-        candle = {"high": h, "low": l, "open": float(row["open"]), "close": float(row["close"])}
+        o, c = float(row["open"]), float(row["close"])
+        candle = {"high": h, "low": l, "open": o, "close": c}
         range_buf.append(candle)
         fvg_buf.append(candle)
 
@@ -95,58 +111,64 @@ def run_backtest():
 
         # 1. Manage Open Trade
         if open_trade:
-            # Check TP/SL
             t = open_trade
+            exit_p = None
             if t["type"] == "BUY":
                 if l <= t["sl"]: exit_p = t["sl"]
                 elif h >= t["tp"]: exit_p = t["tp"]
                 else:
                     if config.AUTO_BREAK_EVEN and t["sl"] < t["entry"]:
                         if (h - t["entry"]) >= (t["entry"] - t["original_sl"]): t["sl"] = t["entry"]
-                    continue
             else: # SELL
                 if h >= t["sl"]: exit_p = t["sl"]
                 elif l <= t["tp"]: exit_p = t["tp"]
                 else:
                     if config.AUTO_BREAK_EVEN and t["sl"] > t["entry"]:
                         if (t["entry"] - l) >= (t["original_sl"] - t["entry"]): t["sl"] = t["entry"]
-                    continue
-            
-            # Close trade
-            p_pips = (exit_p - t["entry"]) / PIP_SIZE if t["type"] == "BUY" else (t["entry"] - exit_p) / PIP_SIZE
-            r_pips = abs(t["entry"] - t["original_sl"]) / PIP_SIZE
-            pnl = (p_pips / r_pips) * RISK_PER_TRADE
-            balance += pnl
-            if pnl > 0: wins += 1
-            else: losses += 1
-            pnl_list.append(pnl)
-            watermark = max(watermark, balance)
-            max_dd = max(max_dd, watermark - balance)
-            open_trade = None
-            continue
+
+            if exit_p is not None:
+                p_pips = (exit_p - t["entry"]) / PIP_SIZE if t["type"] == "BUY" else (t["entry"] - exit_p) / PIP_SIZE
+                r_pips = abs(t["entry"] - t["original_sl"]) / PIP_SIZE
+                pnl = (p_pips / r_pips) * RISK_PER_TRADE if r_pips > 0 else 0
+                balance += pnl
+                if pnl > 0: wins += 1
+                else: losses += 1
+                pnl_list.append(pnl)
+                watermark = max(watermark, balance)
+                max_dd = max(max_dd, watermark - balance)
+                open_trade = None
+            else:
+                continue
 
         # 2. Window Filter (London/NY)
         if not (("14:00" <= t_str <= "18:00") or ("19:00" <= t_str <= "22:59")): continue
+        c_session += 1
         if len(range_buf) < 288: continue
 
         # 3. HTF Bias (H1 EMA)
         h1_ts = ts.replace(minute=0, second=0)
         if h1_ts not in df_h1.index: continue
         ema = df_h1.loc[h1_ts, 'ema']
-        bias = "BULLISH" if row["close"] > ema else "BEARISH"
+        bias = "BULLISH" if c > ema else "BEARISH"
+        c_bias += 1
 
         # 4. Session Range & Sweep
-        s_h = max(c["high"] for c in list(range_buf)[:-1])
-        s_l = min(c["low"]  for c in list(range_buf)[:-1])
+        s_h = max(can["high"] for can in list(range_buf)[:-1])
+        s_l = min(can["low"]  for can in list(range_buf)[:-1])
 
         # Check last 30 mins for sweep
         last6 = list(fvg_buf)[-6:]
-        curr_h = max(c["high"] for c in last6)
-        curr_l = min(c["low"]  for c in last6)
+        curr_h = max(can["high"] for can in last6)
+        curr_l = min(can["low"]  for can in last6)
 
         sweep = None
-        if curr_h >= s_h + THRESHOLD: sweep = "HIGH"
-        elif curr_l <= s_l - THRESHOLD: sweep = "LOW"
+        if curr_h >= s_h + THRESHOLD: 
+            sweep = "HIGH"
+            c_sweep += 1
+        elif curr_l <= s_l - THRESHOLD: 
+            sweep = "LOW"
+            c_sweep += 1
+        
         if not sweep: continue
 
         # 5. FVG Detection
@@ -156,27 +178,40 @@ def run_backtest():
             if sweep == "HIGH" and bias == "BEARISH":
                 gap = older["low"] - newer["high"]
                 if gap >= FVG_MIN:
+                    c_fvg += 1
                     te = (older["low"] + newer["high"]) / 2 if config.USE_FVG_50_ENTRY else newer["high"]
                     sl = curr_h + SL_BUFF
                     sl_p = (sl - te) / PIP_SIZE
-                    # GOLD FIX: SL is usually $2-$8 (200-800 pips)
-                    if 3.0 <= sl_p <= 800.0:
+                    if 3.0 <= sl_p <= 1000.0:
                         open_trade = {"type": "SELL", "entry": te, "sl": sl, "original_sl": sl, "tp": te - (sl - te) * config.TP_RATIO}
                         break
             elif sweep == "LOW" and bias == "BULLISH":
                 gap = newer["low"] - older["high"]
                 if gap >= FVG_MIN:
+                    c_fvg += 1
                     te = (newer["low"] + older["high"]) / 2 if config.USE_FVG_50_ENTRY else newer["low"]
                     sl = curr_l - SL_BUFF
                     sl_p = (te - sl) / PIP_SIZE
-                    if 3.0 <= sl_p <= 800.0:
+                    if 3.0 <= sl_p <= 1000.0:
                         open_trade = {"type": "BUY", "entry": te, "sl": sl, "original_sl": sl, "tp": te + (te - sl) * config.TP_RATIO}
                         break
 
     # Report
     total = wins + losses
     wr = (wins/total*100) if total > 0 else 0
-    pf = (sum(p for p in pnl_list if p > 0) / abs(sum(p for p in pnl_list if p < 0))) if losses > 0 else 0
+    gross_p = sum(p for p in pnl_list if p > 0)
+    gross_l = abs(sum(p for p in pnl_list if p < 0))
+    pf = (gross_p / gross_l) if gross_l > 0 else 0
+    
+    print("\n" + "="*50)
+    print("📈 DIAGNOSTIC COUNTERS")
+    print("-" * 50)
+    print(f"Candles in Session Window: {c_session}")
+    print(f"Candles passing EMA Bias: {c_bias}")
+    print(f"Candles with Active Sweep: {c_sweep}")
+    print(f"Valid FVG formations found: {c_fvg}")
+    print("="*50)
+
     print(f"\nRESULTS:\nBalance: ${balance:,.2f} | Trades: {total} | WinRate: {wr:.1f}% | ProfitFactor: {pf:.2f} | MaxDD: ${max_dd:,.2f}")
 
 if __name__ == "__main__":
