@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # ─── Settings ──────────────────────────────────────────────────────────────────
 # Set your backtest range here
 START_DATE      = datetime(2026, 1, 1)
-END_DATE        = datetime(2026, 1, 31, 23, 59)
+END_DATE        = datetime(2026, 2, 28, 23, 59)
 INITIAL_BALANCE = 10_000.0
 RISK_PER_TRADE  = 50.0  # 0.5%
 BROKER_TO_WIB   = 4
