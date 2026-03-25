@@ -161,6 +161,8 @@ def run_backtest():
             bias = "BULLISH" if c > ema else "BEARISH"
 
         # 4. Sweep Detection (Persistent)
+        if active_s_h is None: continue
+
         if h >= active_s_h + THRESHOLD:
             last_sweep_type = "HIGH"
             sweep_expiry = ts + timedelta(minutes=60)
