@@ -1,7 +1,6 @@
 """
-Forex Liquidity Hunter - Historical Backtester v4.1
-Matches strategy.py perfectly: 24h range, HTF EMA filter, and specific Gold fix.
-Includes diagnostic counters to identify where filters are blocking trades.
+Forex Liquidity Hunter - Historical Backtester v5
+Final Logic: Frozen Session Ranges, 1-Hour Sweep Memory, and H1 Trend Follow.
 """
 import logging
 from collections import deque
@@ -25,7 +24,7 @@ logger = logging.getLogger(__name__)
 SYMBOL            = "XAUUSDx" if "XAUUSDx" in config.SYMBOLS else config.SYMBOLS[-1]
 DAYS_TO_BACKTEST  = 180
 INITIAL_BALANCE   = 10_000.0
-RISK_PER_TRADE    = 50.0  # $50 risk per trade (0.5%)
+RISK_PER_TRADE    = 50.0
 
 # Pip size for the tested symbol
 PIP_SIZE = 0.01 if "XAU" in SYMBOL or "JPY" in SYMBOL else 0.0001
@@ -33,7 +32,6 @@ THRESHOLD = config.SWEEP_THRESHOLD_PIPS * PIP_SIZE
 FVG_MIN   = config.FVG_MIN_SIZE_PIPS    * PIP_SIZE
 SL_BUFF   = config.SL_BUFFER_PIPS       * PIP_SIZE
 
-# Offset: Broker Time -> WIB (Usually +4 or +5)
 BROKER_TO_WIB = 4
 
 # ─── MT5 ───────────────────────────────────────────────────────────────────────
@@ -67,10 +65,9 @@ def run_backtest():
         logger.error("❌ Data download failed.")
         return
 
-    # Calculate HTF EMA (H1 20 EMA)
     df_h1['ema'] = df_h1['close'].ewm(span=config.HTF_EMA_PERIOD, adjust=False).mean()
 
-    # State variables
+    # State
     balance = INITIAL_BALANCE
     watermark = INITIAL_BALANCE
     max_dd = 0.0
@@ -79,33 +76,28 @@ def run_backtest():
     open_trade = None
 
     # Persistent logic
-    range_buf = deque(maxlen=288) # 24 hours of M5 = 288 candles
-    fvg_buf   = deque(maxlen=12)  # last 1 hour
+    range_buf = deque(maxlen=288) # 24 hours
+    fvg_buf   = deque(maxlen=24)  # 2 hours
     
-    # Diagnostic counters
+    # Frozen session state
+    active_s_h, active_s_l = None, None
+    last_sweep_type = None
+    sweep_expiry = datetime.min
+    
+    # Diagnostic
     c_session = 0
-    c_bias = 0
     c_sweep = 0
     c_fvg = 0
 
     logger.info("⏳ Running accurate simulation...")
-    
-    # Print sample timestamps for timezone verification
-    sample_rows = df_m5.head(5)
-    print("\n--- Timezone Diagnostic (First 5 candles) ---")
-    for ts, row in sample_rows.iterrows():
-        wib = ts + timedelta(hours=BROKER_TO_WIB)
-        print(f"Broker: {ts.strftime('%H:%M')} -> WIB: {wib.strftime('%H:%M')}")
-    print("--------------------------------------------\n")
 
     for ts, row in df_m5.iterrows():
         h, l = float(row["high"]), float(row["low"])
         o, c = float(row["open"]), float(row["close"])
-        candle = {"high": h, "low": l, "open": o, "close": c}
+        candle = {"high": h, "low": l, "open": o, "close": c, "time": ts}
         range_buf.append(candle)
         fvg_buf.append(candle)
 
-        # WIB Time
         wib = ts + timedelta(hours=BROKER_TO_WIB)
         t_str = wib.strftime("%H:%M")
 
@@ -137,60 +129,73 @@ def run_backtest():
                 watermark = max(watermark, balance)
                 max_dd = max(max_dd, watermark - balance)
                 open_trade = None
+                # Reset sweep after trade
+                last_sweep_type = None
+                sweep_expiry = datetime.min
             else:
                 continue
 
-        # 2. Window Filter (London/NY)
-        if not (("14:00" <= t_str <= "18:00") or ("19:00" <= t_str <= "22:59")): continue
-        c_session += 1
-        if len(range_buf) < 288: continue
-
-        # 3. HTF Bias (H1 EMA)
-        h1_ts = ts.replace(minute=0, second=0)
-        if h1_ts not in df_h1.index: continue
-        ema = df_h1.loc[h1_ts, 'ema']
-        bias = "BULLISH" if c > ema else "BEARISH"
-        c_bias += 1
-
-        # 4. Session Range & Sweep
-        s_h = max(can["high"] for can in list(range_buf)[:-1])
-        s_l = min(can["low"]  for can in list(range_buf)[:-1])
-
-        # Check last 30 mins for sweep
-        last6 = list(fvg_buf)[-6:]
-        curr_h = max(can["high"] for can in last6)
-        curr_l = min(can["low"]  for can in last6)
-
-        sweep = None
-        if curr_h >= s_h + THRESHOLD: 
-            sweep = "HIGH"
-            c_sweep += 1
-        elif curr_l <= s_l - THRESHOLD: 
-            sweep = "LOW"
-            c_sweep += 1
+        # 2. Session Window Logic
+        in_window = ("14:00" <= t_str <= "18:00") or ("19:00" <= t_str <= "22:59")
         
-        if not sweep: continue
+        # Calculate range ONLY once at start of window
+        if in_window and active_s_h is None:
+            if len(range_buf) >= 200: # Enough for a good 8-16h range
+                active_s_h = max(can["high"] for can in list(range_buf)[:-1])
+                active_s_l = min(can["low"]  for can in list(range_buf)[:-1])
+        
+        # Reset range when outside window
+        if not in_window:
+            active_s_h, active_s_l = None, None
+            last_sweep_type = None
+            sweep_expiry = datetime.min
+            continue
+
+        c_session += 1
+        
+        # 3. HTF Bias
+        h1_ts = ts.replace(minute=0, second=0)
+        bias = "NEUTRAL"
+        if h1_ts in df_h1.index:
+            ema = df_h1.loc[h1_ts, 'ema']
+            bias = "BULLISH" if c > ema else "BEARISH"
+
+        # 4. Sweep Detection (Persistent)
+        if h >= active_s_h + THRESHOLD:
+            last_sweep_type = "HIGH"
+            sweep_expiry = ts + timedelta(minutes=60)
+            c_sweep += 1
+        elif l <= active_s_l - THRESHOLD:
+            last_sweep_type = "LOW"
+            sweep_expiry = ts + timedelta(minutes=60)
+            c_sweep += 1
+
+        # Check if we have an active sweep memory
+        if ts > sweep_expiry:
+            last_sweep_type = None
+        
+        if not last_sweep_type: continue
 
         # 5. FVG Detection
         cl = list(fvg_buf)
         for i in range(len(cl)-1, 1, -1):
             newer, older = cl[i], cl[i-2]
-            if sweep == "HIGH" and bias == "BEARISH":
+            if last_sweep_type == "HIGH" and bias == "BEARISH":
                 gap = older["low"] - newer["high"]
                 if gap >= FVG_MIN:
                     c_fvg += 1
                     te = (older["low"] + newer["high"]) / 2 if config.USE_FVG_50_ENTRY else newer["high"]
-                    sl = curr_h + SL_BUFF
+                    sl = max(can["high"] for can in cl[-12:]) + SL_BUFF # SL above recent high
                     sl_p = (sl - te) / PIP_SIZE
                     if 3.0 <= sl_p <= 1000.0:
                         open_trade = {"type": "SELL", "entry": te, "sl": sl, "original_sl": sl, "tp": te - (sl - te) * config.TP_RATIO}
                         break
-            elif sweep == "LOW" and bias == "BULLISH":
+            elif last_sweep_type == "LOW" and bias == "BULLISH":
                 gap = newer["low"] - older["high"]
                 if gap >= FVG_MIN:
                     c_fvg += 1
                     te = (newer["low"] + older["high"]) / 2 if config.USE_FVG_50_ENTRY else newer["low"]
-                    sl = curr_l - SL_BUFF
+                    sl = min(can["low"] for can in cl[-12:]) - SL_BUFF
                     sl_p = (te - sl) / PIP_SIZE
                     if 3.0 <= sl_p <= 1000.0:
                         open_trade = {"type": "BUY", "entry": te, "sl": sl, "original_sl": sl, "tp": te + (te - sl) * config.TP_RATIO}
@@ -199,20 +204,9 @@ def run_backtest():
     # Report
     total = wins + losses
     wr = (wins/total*100) if total > 0 else 0
-    gross_p = sum(p for p in pnl_list if p > 0)
-    gross_l = abs(sum(p for p in pnl_list if p < 0))
-    pf = (gross_p / gross_l) if gross_l > 0 else 0
-    
-    print("\n" + "="*50)
-    print("📈 DIAGNOSTIC COUNTERS")
-    print("-" * 50)
-    print(f"Candles in Session Window: {c_session}")
-    print(f"Candles passing EMA Bias: {c_bias}")
-    print(f"Candles with Active Sweep: {c_sweep}")
-    print(f"Valid FVG formations found: {c_fvg}")
-    print("="*50)
-
-    print(f"\nRESULTS:\nBalance: ${balance:,.2f} | Trades: {total} | WinRate: {wr:.1f}% | ProfitFactor: {pf:.2f} | MaxDD: ${max_dd:,.2f}")
+    pf = (sum(p for p in pnl_list if p > 0) / abs(sum(p for p in pnl_list if p < 0))) if losses > 0 else 0
+    print(f"\nDIAGNOSTIC: SessionC={c_session} | SweepC={c_sweep} | FVGC={c_fvg}")
+    print(f"RESULTS: Balance: ${balance:,.2f} | Trades: {total} | WinRate: {wr:.1f}% | ProfitFactor: {pf:.2f}")
 
 if __name__ == "__main__":
     run_backtest()
