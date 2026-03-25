@@ -1,9 +1,6 @@
 """
-Forex Liquidity Hunter - Historical Backtester v3
-Simulates the SMC Strategy (Session sweeps, FVGs, Auto Break-Even) on historical MT5 data.
-Completely standalone - does NOT touch main.py or execute any live trades.
-
-Run with: python backtest.py
+Forex Liquidity Hunter - Historical Backtester v4
+Matches strategy.py perfectly: 24h range, HTF EMA filter, and specific Gold fix.
 """
 import logging
 from collections import deque
@@ -25,277 +22,162 @@ logger = logging.getLogger(__name__)
 
 # ─── Backtest Parameters ───────────────────────────────────────────────────────
 SYMBOL            = "XAUUSDx" if "XAUUSDx" in config.SYMBOLS else config.SYMBOLS[-1]
-DAYS_TO_BACKTEST  = 180          # 6 months
+DAYS_TO_BACKTEST  = 180
 INITIAL_BALANCE   = 10_000.0
-RISK_PER_TRADE    = 50.0         # $50 fixed risk per trade  (= 0.5% of $10k)
+RISK_PER_TRADE    = 50.0  # $50 risk per trade (0.5%)
 
 # Pip size for the tested symbol
 PIP_SIZE = 0.01 if "XAU" in SYMBOL or "JPY" in SYMBOL else 0.0001
+THRESHOLD = config.SWEEP_THRESHOLD_PIPS * PIP_SIZE
+FVG_MIN   = config.FVG_MIN_SIZE_PIPS    * PIP_SIZE
+SL_BUFF   = config.SL_BUFFER_PIPS       * PIP_SIZE
 
-# Thresholds (in price units, pre-multiplied for speed)
-SWEEP_THRESH  = config.SWEEP_THRESHOLD_PIPS * PIP_SIZE
-FVG_MIN       = config.FVG_MIN_SIZE_PIPS    * PIP_SIZE
-SL_BUFFER     = config.SL_BUFFER_PIPS       * PIP_SIZE
-SLIPPAGE      = 2 * PIP_SIZE                # 2-pip tolerance for FVG entry check
-
-# Session hours in WIB (UTC+7).  MT5 broker time ≈ UTC+3, so +4h ≈ WIB.
-# We add 4 hours to every candle timestamp when checking sessions.
+# Offset: Broker Time -> WIB (Usually +4 or +5)
 BROKER_TO_WIB = 4
-
 
 # ─── MT5 ───────────────────────────────────────────────────────────────────────
 def initialize_mt5():
-    if not MT5_AVAILABLE:
-        logger.error("MetaTrader5 package not installed. Cannot download historical data.")
-        return False
-
-    kwargs = {
-        "login":    config.MT5_LOGIN,
-        "password": config.MT5_PASSWORD,
-        "server":   config.MT5_SERVER,
-    }
-    if config.MT5_PATH:
-        kwargs["path"] = config.MT5_PATH
-
-    if not mt5.initialize(**kwargs):
-        logger.error(f"MT5 initialize failed: {mt5.last_error()}")
-        return False
+    if not MT5_AVAILABLE: return False
+    kwargs = {"login": config.MT5_LOGIN, "password": config.MT5_PASSWORD, "server": config.MT5_SERVER}
+    if config.MT5_PATH: kwargs["path"] = config.MT5_PATH
+    if not mt5.initialize(**kwargs): return False
     return True
 
-
-def download_data():
-    now        = datetime.now()
-    start_date = now - timedelta(days=DAYS_TO_BACKTEST)
-    rates = mt5.copy_rates_range(SYMBOL, mt5.TIMEFRAME_M5, start_date, now)
-    mt5.shutdown()
-
-    if rates is None or len(rates) == 0:
-        logger.error("❌ No data returned. Check symbol name and MT5 connection.")
-        return None
-
+def download_data(tf, days):
+    now = datetime.now()
+    start = now - timedelta(days=days)
+    rates = mt5.copy_rates_range(SYMBOL, tf, start, now)
+    if rates is None: return None
     df = pd.DataFrame(rates)
     df["time"] = pd.to_datetime(df["time"], unit="s")
     df.set_index("time", inplace=True)
-    logger.info(f"✅ Downloaded {len(df):,} M5 candles.")
     return df
 
-
 # ─── Simulation ────────────────────────────────────────────────────────────────
-def is_in_session(t_str: str) -> bool:
-    """Check if the WIB time string is in London or NY window."""
-    return ("14:00" <= t_str <= "18:00") or ("19:00" <= t_str <= "22:59")
-
-
 def run_backtest():
-    if not initialize_mt5():
+    if not initialize_mt5(): return
+
+    logger.info(f"📥 Downloading data for {SYMBOL}...")
+    df_m5  = download_data(mt5.TIMEFRAME_M5, DAYS_TO_BACKTEST)
+    df_h1  = download_data(mt5.TIMEFRAME_H1, DAYS_TO_BACKTEST + 2)
+    mt5.shutdown()
+
+    if df_m5 is None or df_h1 is None:
+        logger.error("❌ Data download failed.")
         return
 
-    logger.info(f"📥 Downloading {DAYS_TO_BACKTEST} days of M5 data for {SYMBOL}...")
-    df = download_data()
-    if df is None:
-        return
+    # Calculate HTF EMA (H1 20 EMA)
+    df_h1['ema'] = df_h1['close'].ewm(span=config.HTF_EMA_PERIOD, adjust=False).mean()
 
-    # ── State variables ──────────────────────────────────────
-    balance     = INITIAL_BALANCE
-    watermark   = INITIAL_BALANCE
-    max_dd      = 0.0
-    wins        = 0
-    losses      = 0
-    pnl_list    = []
+    # State
+    balance = INITIAL_BALANCE
+    watermark = INITIAL_BALANCE
+    max_dd = 0.0
+    wins, losses = 0, 0
+    pnl_list = []
+    open_trade = None
 
-    open_trade  = None   # dict or None
-    current_day = None
-    daily_pnl   = 0.0
-    daily_halted= False
+    # Persistent logic
+    range_buf = deque(maxlen=288) # 24 hours of M5 = 288 candles
+    fvg_buf   = deque(maxlen=12)  # last 1 hour
+    
+    logger.info("⏳ Running accurate simulation...")
 
-    # Rolling windows
-    range_buf   = deque(maxlen=96)   # last 8 hours for session range (96 × 5min)
-    fvg_buf     = deque(maxlen=10)   # last 10 candles for FVG search
-
-    logger.info("⏳ Running simulation loop...")
-
-    for ts, row in df.iterrows():
-        high = float(row["high"])
-        low  = float(row["low"])
-        o    = float(row["open"])
-        c    = float(row["close"])
-
-        # ── 0. Push candle into rolling buffers ──
-        candle = {"high": high, "low": low, "open": o, "close": c}
+    for ts, row in df_m5.iterrows():
+        h, l = float(row["high"]), float(row["low"])
+        candle = {"high": h, "low": l, "open": float(row["open"]), "close": float(row["close"])}
         range_buf.append(candle)
         fvg_buf.append(candle)
 
-        # ── 1. Daily reset ───────────────────────
-        wib_dt  = ts + timedelta(hours=BROKER_TO_WIB)
-        day_str = wib_dt.strftime("%Y-%m-%d")
-        t_str   = wib_dt.strftime("%H:%M")
+        # WIB Time
+        wib = ts + timedelta(hours=BROKER_TO_WIB)
+        t_str = wib.strftime("%H:%M")
 
-        if day_str != current_day:
-            current_day  = day_str
-            daily_pnl    = 0.0
-            daily_halted = False
-
-        # ── 2. Manage open trade ─────────────────
-        if open_trade is not None:
-            tp    = open_trade["tp"]
-            sl    = open_trade["sl"]
-            entry = open_trade["entry"]
-            trade_type  = open_trade["type"]
-            original_sl = open_trade["original_sl"]
-
-            close_price = None
-
-            if trade_type == "BUY":
-                if low <= sl:
-                    close_price = sl
-                elif high >= tp:
-                    close_price = tp
+        # 1. Manage Open Trade
+        if open_trade:
+            # Check TP/SL
+            t = open_trade
+            if t["type"] == "BUY":
+                if l <= t["sl"]: exit_p = t["sl"]
+                elif h >= t["tp"]: exit_p = t["tp"]
                 else:
-                    # Auto Break-Even
-                    if config.AUTO_BREAK_EVEN and sl < entry:
-                        risk = entry - original_sl
-                        if risk > 0 and (high - entry) >= risk * config.BE_ACTIVATION_RATIO:
-                            open_trade["sl"] = entry
-            else:  # SELL
-                if high >= sl:
-                    close_price = sl
-                elif low <= tp:
-                    close_price = tp
+                    if config.AUTO_BREAK_EVEN and t["sl"] < t["entry"]:
+                        if (h - t["entry"]) >= (t["entry"] - t["original_sl"]): t["sl"] = t["entry"]
+                    continue
+            else: # SELL
+                if h >= t["sl"]: exit_p = t["sl"]
+                elif l <= t["tp"]: exit_p = t["tp"]
                 else:
-                    # Auto Break-Even
-                    if config.AUTO_BREAK_EVEN and sl > entry:
-                        risk = original_sl - entry
-                        if risk > 0 and (entry - low) >= risk * config.BE_ACTIVATION_RATIO:
-                            open_trade["sl"] = entry
-
-            if close_price is not None:
-                if trade_type == "BUY":
-                    profit_pips = (close_price - entry) / PIP_SIZE
-                else:
-                    profit_pips = (entry - close_price) / PIP_SIZE
-
-                risk_pips = abs(entry - original_sl) / PIP_SIZE
-                pnl = (profit_pips / risk_pips) * RISK_PER_TRADE if risk_pips > 0 else 0.0
-
-                balance   += pnl
-                daily_pnl += pnl
-
-                if pnl > 0:
-                    wins += 1
-                else:
-                    losses += 1
-
-                pnl_list.append(pnl)
-                watermark = max(watermark, balance)
-                max_dd    = max(max_dd, watermark - balance)
-
-                if daily_pnl <= -config.DAILY_LOSS_LIMIT:
-                    daily_halted = True
-
-                open_trade = None
-
-            # Don't look for new signals while trade is open
+                    if config.AUTO_BREAK_EVEN and t["sl"] > t["entry"]:
+                        if (t["entry"] - l) >= (t["original_sl"] - t["entry"]): t["sl"] = t["entry"]
+                    continue
+            
+            # Close trade
+            p_pips = (exit_p - t["entry"]) / PIP_SIZE if t["type"] == "BUY" else (t["entry"] - exit_p) / PIP_SIZE
+            r_pips = abs(t["entry"] - t["original_sl"]) / PIP_SIZE
+            pnl = (p_pips / r_pips) * RISK_PER_TRADE
+            balance += pnl
+            if pnl > 0: wins += 1
+            else: losses += 1
+            pnl_list.append(pnl)
+            watermark = max(watermark, balance)
+            max_dd = max(max_dd, watermark - balance)
+            open_trade = None
             continue
 
-        # ── 3. Skip if daily limit hit ───────────
-        if daily_halted:
-            continue
+        # 2. Window Filter (London/NY)
+        if not (("14:00" <= t_str <= "18:00") or ("19:00" <= t_str <= "22:59")): continue
+        if len(range_buf) < 288: continue
 
-        # ── 4. Only generate signals in session windows ──
-        if not is_in_session(t_str):
-            continue
+        # 3. HTF Bias (H1 EMA)
+        h1_ts = ts.replace(minute=0, second=0)
+        if h1_ts not in df_h1.index: continue
+        ema = df_h1.loc[h1_ts, 'ema']
+        bias = "BULLISH" if row["close"] > ema else "BEARISH"
 
-        # ── 5. Need enough data ──────────────────
-        if len(range_buf) < 96 or len(fvg_buf) < 3:
-            continue
+        # 4. Session Range & Sweep
+        s_h = max(c["high"] for c in list(range_buf)[:-1])
+        s_l = min(c["low"]  for c in list(range_buf)[:-1])
 
-        # ── 6. Session range (last 95 closed candles, excl. current) ──
-        session_high = max(c["high"] for c in list(range_buf)[:-1])
-        session_low  = min(c["low"]  for c in list(range_buf)[:-1])
-
-        # ── 7. Sweep detection ───────────────────
-        # Use last 6 candles (30 min) to detect the sweep
+        # Check last 30 mins for sweep
         last6 = list(fvg_buf)[-6:]
-        recent_high = max(c["high"] for c in last6)
-        recent_low  = min(c["low"]  for c in last6)
+        curr_h = max(c["high"] for c in last6)
+        curr_l = min(c["low"]  for c in last6)
 
-        if recent_high >= session_high + SWEEP_THRESH:
-            sweep_type    = "HIGH_SWEPT"
-            sweep_extreme = recent_high
-        elif recent_low <= session_low - SWEEP_THRESH:
-            sweep_type    = "LOW_SWEPT"
-            sweep_extreme = recent_low
-        else:
-            continue  # No sweep this candle
+        sweep = None
+        if curr_h >= s_h + THRESHOLD: sweep = "HIGH"
+        elif curr_l <= s_l - THRESHOLD: sweep = "LOW"
+        if not sweep: continue
 
-        # ── 8. FVG detection ─────────────────────
-        # Strategy: find the first valid FVG after the sweep and enter at 50% midpoint.
-        # On M5 OHLC data, we cannot always see price perfectly entering the FVG,
-        # so we enter on the NEXT candle after an FVG forms post-sweep.
-        candles_list = list(fvg_buf)  # oldest → newest
-
-        for i in range(len(candles_list) - 1, 1, -1):
-            newer  = candles_list[i]
-            older  = candles_list[i - 2]
-
-            if sweep_type == "HIGH_SWEPT":
-                # Bearish FVG: gap between older.low and newer.high
+        # 5. FVG Detection
+        cl = list(fvg_buf)
+        for i in range(len(cl)-1, 1, -1):
+            newer, older = cl[i], cl[i-2]
+            if sweep == "HIGH" and bias == "BEARISH":
                 gap = older["low"] - newer["high"]
                 if gap >= FVG_MIN:
-                    fvg_top    = older["low"]
-                    fvg_bottom = newer["high"]
-                    target_en  = (fvg_top + fvg_bottom) / 2.0 if config.USE_FVG_50_ENTRY else fvg_bottom
-                    sl       = sweep_extreme + SL_BUFFER
-                    sl_pips  = (sl - target_en) / PIP_SIZE
-                    if 1.0 <= sl_pips <= 100.0:   # wide range – Gold SL can be 20-80 pips
-                        open_trade = {
-                            "type": "SELL", "entry": target_en,
-                            "sl": sl, "original_sl": sl,
-                            "tp": target_en - (sl - target_en) * config.TP_RATIO,
-                        }
+                    te = (older["low"] + newer["high"]) / 2 if config.USE_FVG_50_ENTRY else newer["high"]
+                    sl = curr_h + SL_BUFF
+                    sl_p = (sl - te) / PIP_SIZE
+                    # GOLD FIX: SL is usually $2-$8 (200-800 pips)
+                    if 3.0 <= sl_p <= 800.0:
+                        open_trade = {"type": "SELL", "entry": te, "sl": sl, "original_sl": sl, "tp": te - (sl - te) * config.TP_RATIO}
                         break
-
-            elif sweep_type == "LOW_SWEPT":
-                # Bullish FVG: gap between newer.low and older.high
+            elif sweep == "LOW" and bias == "BULLISH":
                 gap = newer["low"] - older["high"]
                 if gap >= FVG_MIN:
-                    fvg_top    = newer["low"]
-                    fvg_bottom = older["high"]
-                    target_en  = (fvg_top + fvg_bottom) / 2.0 if config.USE_FVG_50_ENTRY else fvg_top
-                    sl       = sweep_extreme - SL_BUFFER
-                    sl_pips  = (target_en - sl) / PIP_SIZE
-                    if 1.0 <= sl_pips <= 100.0:
-                        open_trade = {
-                            "type": "BUY", "entry": target_en,
-                            "sl": sl, "original_sl": sl,
-                            "tp": target_en + (target_en - sl) * config.TP_RATIO,
-                        }
+                    te = (newer["low"] + older["high"]) / 2 if config.USE_FVG_50_ENTRY else newer["low"]
+                    sl = curr_l - SL_BUFF
+                    sl_p = (te - sl) / PIP_SIZE
+                    if 3.0 <= sl_p <= 800.0:
+                        open_trade = {"type": "BUY", "entry": te, "sl": sl, "original_sl": sl, "tp": te + (te - sl) * config.TP_RATIO}
                         break
 
-    # ─── Final Report ───────────────────────────────────────────────────────────
-    total   = wins + losses
-    wr      = (wins / total * 100) if total > 0 else 0
-    gross_p = sum(p for p in pnl_list if p > 0)
-    gross_l = abs(sum(p for p in pnl_list if p < 0))
-    pf      = (gross_p / gross_l) if gross_l > 0 else float("inf")
-
-    print("\n" + "=" * 55)
-    print("📊  BACKTEST RESULTS  —  6 MONTHS")
-    print("=" * 55)
-    print(f"  Symbol           : {SYMBOL}")
-    print(f"  Initial Balance  : ${INITIAL_BALANCE:>10,.2f}")
-    print(f"  Final Balance    : ${balance:>10,.2f}")
-    print(f"  Net Profit       : ${balance - INITIAL_BALANCE:>+10,.2f}")
-    print(f"  Total Trades     : {total}")
-    print(f"  Win Rate         : {wr:.1f}%  ({wins}W / {losses}L)")
-    print(f"  Profit Factor    : {pf:.2f}")
-    dd_flag = "❌ PROPFIRM FAILED" if max_dd > 400 else "✅ SAFE"
-    print(f"  Max Drawdown     : ${max_dd:>10,.2f}  {dd_flag}")
-    print("=" * 55)
-    print("\nNote: Backtester uses M5 OHLC only. Actual tick-level")
-    print("execution may vary slightly. Run MT5 Strategy Tester for")
-    print("tick-by-tick precision.")
-
+    # Report
+    total = wins + losses
+    wr = (wins/total*100) if total > 0 else 0
+    pf = (sum(p for p in pnl_list if p > 0) / abs(sum(p for p in pnl_list if p < 0))) if losses > 0 else 0
+    print(f"\nRESULTS:\nBalance: ${balance:,.2f} | Trades: {total} | WinRate: {wr:.1f}% | ProfitFactor: {pf:.2f} | MaxDD: ${max_dd:,.2f}")
 
 if __name__ == "__main__":
     run_backtest()
