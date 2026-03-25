@@ -52,12 +52,12 @@ TIMEZONE = "Asia/Jakarta"  # UTC+7
 # TRADING PAIRS
 # =============================================================================
 SYMBOLS = [
-    "EURUSD",
-    "GBPUSD",
-    "USDJPY",
-    "EURJPY",
-    "GBPJPY",
-    "XAUUSD",   # Gold is highly volatile, ensure MAX_SPREAD_PIPS accommodates it
+    "EURUSDx",
+    "GBPUSDx",
+    "USDJPYx",
+    "EURJPYx",
+    "GBPJPYx",
+    "XAUUSDx",   # Gold is highly volatile, ensure MAX_SPREAD_PIPS accommodates it
 ]
 
 # =============================================================================
