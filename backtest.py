@@ -159,17 +159,22 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date):
 def run_backtest():
     if not initialize_mt5(): return
     
-    print(f"🚀 Starting Rolling 12-Month Audit...")
+    # Target 3 months as requested (approx 90 days)
+    DAYS_BACK = 90
+    print(f"🚀 Starting 3-Month Historical Audit (Last {DAYS_BACK} days)...")
     
     symbol_data_cache = {}
     total_min_date = datetime.now()
     
     for symbol in config.SYMBOLS:
         print(f"📥 Loading {symbol}...", end="\r")
-        df_m5, df_h1 = get_symbol_data(symbol, days_back=365)
+        df_m5, df_h1 = get_symbol_data(symbol, days_back=DAYS_BACK)
         if df_m5 is not None and not df_m5.empty:
+            print(f"   ✅ {symbol}: Loaded {len(df_m5)} candles.")
             symbol_data_cache[symbol] = (df_m5, df_h1)
             total_min_date = min(total_min_date, df_m5.index.min())
+        else:
+            print(f"   ⚠️ {symbol}: No history found for last {DAYS_BACK} days.")
 
     if not symbol_data_cache:
         print("❌ Error: No historical data available on this broker.")
