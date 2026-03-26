@@ -22,20 +22,21 @@ ACCOUNT_BALANCE         = 10000.0  # Default evaluation balance
 MAX_RISK_PER_TRADE_PCT  = 0.5      # 0.5% risk per trade ($50)
 DAILY_LOSS_LIMIT        = 150.0    # Stop trading if down $150 in a day
 TOTAL_LOSS_LIMIT        = 350.0    # Stop trading if down $350 total
-PROFIT_TARGET           = 1000.0   # Target for WD
-DAILY_PROFIT_CAP        = 250.0    # Hard cap at 25% for safety margin
-MAX_OPEN_TRADES         = 1        # One at a time for maximum focus
+PROFIT_TARGET           = 1200.0   # Aim higher to hit $1000 safely
+DAILY_PROFIT_CAP        = 350.0    # Adjusted for $1200 target (approx 30%)
+MAX_OPEN_TRADES         = 2        # Allow capturing simultaneous opportunities
 
-# ─── Strategy Parameters (Optimized V11) ──────────────────────────────────────
+# ─── Strategy Parameters (Optimized V12) ──────────────────────────────────────
 SCAN_TIMEFRAME_MINUTES  = 5        # Entry checking interval
 RANGE_TIMEFRAME_MINUTES = 15       # Session range identification
-SWEEP_THRESHOLD_PIPS    = 1.0      # 1.0 pip sweep (very sensitive)
-FVG_MIN_SIZE_PIPS       = 0.2      # 0.2 pips minimum gap (almost any FVG)
+SWEEP_THRESHOLD_PIPS    = 0.8      # 0.8 pip sweep (Aggressive Growth)
+FVG_MIN_SIZE_PIPS       = 0.2      # 0.2 pips minimum gap
 SL_BUFFER_PIPS          = 2.0      # 2.0 pips extra SL room
-TP_RATIO                = 1.5      # 1.5:1 Reward to Risk (higher hit rate)
+TP_RATIO                = 1.8      # 1.8:1 Reward to Risk
 AUTO_BREAK_EVEN         = True     # Protected trades
-BE_ACTIVATION_RATIO     = 1.1      # 1.1R before moving to BE
+BE_ACTIVATION_RATIO     = 1.2      # 1.2R before moving to BE
 USE_FVG_50_ENTRY        = True     # 50% Consequent Encroachment entry strategy
+
 
 # =============================================================================
 # SESSION WINDOWS (UTC+7 / WIB)
