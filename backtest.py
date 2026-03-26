@@ -1,6 +1,6 @@
 """
-Forex Liquidity Hunter - Backtester v11 (LONG-TERM AUDIT)
-Month-by-month 12-month simulation for 2025.
+Forex Liquidity Hunter - Backtester v12 (ROLLING AUDIT)
+Automatically detects available history and tests month-by-month.
 """
 import logging
 from collections import deque
@@ -17,11 +17,10 @@ except ImportError:
 
 import config
 
-logging.basicConfig(level=logging.ERROR, format="%(message)s") # Reduce logs for long runs
+logging.basicConfig(level=logging.ERROR, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 # ─── Settings ──────────────────────────────────────────────────────────────────
-YEAR_TO_TEST    = 2025
 BROKER_TO_WIB   = 4
 ACCOUNT_BALANCE = config.ACCOUNT_BALANCE
 RISK_PER_TRADE  = config.ACCOUNT_BALANCE * config.MAX_RISK_PER_TRADE_PCT / 100.0
@@ -33,37 +32,42 @@ def initialize_mt5():
     if not mt5.initialize(**kwargs): return False
     return True
 
-def get_symbol_data(symbol, start, end):
-    fetch_start = start - timedelta(days=2)
-    rates_m5 = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M5, fetch_start, end)
-    rates_h1 = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_H1, fetch_start, end)
+def get_symbol_data(symbol, days_back=365):
+    """Fetches as much historical data as the broker allows (up to days_back)."""
+    end = datetime.now()
+    start = end - timedelta(days=days_back)
+    
+    rates_m5 = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M5, start, end)
+    rates_h1 = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_H1, start, end)
+    
     if rates_m5 is None or rates_h1 is None: return None, None
+    
     df_m5 = pd.DataFrame(rates_m5)
     df_m5["time"] = pd.to_datetime(df_m5["time"], unit="s")
     df_m5.set_index("time", inplace=True)
+    
     df_h1 = pd.DataFrame(rates_h1)
     df_h1["time"] = pd.to_datetime(df_h1["time"], unit="s")
     df_h1.set_index("time", inplace=True)
     df_h1['ema'] = df_h1['close'].ewm(span=config.HTF_EMA_PERIOD, adjust=False).mean()
+    
     return df_m5, df_h1
 
-def calculate_lots(risk, sl_dist, sym_info):
-    if sl_dist <= 0: return 0.01
-    pip_val = sym_info.trade_tick_value / sym_info.point * (sym_info.point * 10 if sym_info.digits in (3,5) else sym_info.point)
-    raw_lots = risk / ( (sl_dist / (sym_info.point * 10 if sym_info.digits in (3,5) else sym_info.point)) * pip_val )
-    return max(sym_info.volume_min, min(round(raw_lots, 2), sym_info.volume_max))
-
 def run_monthly_backtest(symbol_data_cache, start_date, end_date):
-    """Runs the simulation for all symbols in a specific date range."""
     monthly_trades = []
     
     for symbol, (df_m5_all, df_h1_all) in symbol_data_cache.items():
         info = mt5.symbol_info(symbol)
         if not info: continue
         
-        # Filter data for this specific month
-        df_m5 = df_m5_all.loc[start_date - timedelta(days=1):end_date]
-        df_h1 = df_h1_all.loc[start_date - timedelta(days=1):end_date]
+        # Slice data for this month
+        try:
+            df_m5 = df_m5_all.loc[start_date:end_date]
+            df_h1 = df_h1_all.loc[start_date - timedelta(days=1):end_date]
+        except KeyError:
+            continue
+            
+        if df_m5.empty: continue
         
         pip_size = info.point * 10 if info.digits in (3, 5) else info.point
         thresh = config.SWEEP_THRESHOLD_PIPS * pip_size
@@ -82,7 +86,6 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date):
             candle = {"high": h, "low": l, "open": o, "close": c}
             range_buf.append(candle)
             fvg_buf.append(candle)
-            if ts < start_date: continue
 
             wib = ts + timedelta(hours=BROKER_TO_WIB)
             t_str = wib.strftime("%H:%M")
@@ -106,9 +109,7 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date):
                 if exit_p is not None:
                     p_pips = (exit_p - t["entry"]) / pip_size if t["type"] == "BUY" else (t["entry"] - exit_p) / pip_size
                     pnl = (p_pips / (r_dist / pip_size)) * RISK_PER_TRADE
-                    monthly_trades.append({
-                        "time": ts, "symbol": symbol, "pnl": pnl
-                    })
+                    monthly_trades.append({"time": ts, "symbol": symbol, "pnl": pnl})
                     open_trade = None; last_sweep_type = None; sweep_expiry = datetime.min
                 continue
 
@@ -151,35 +152,51 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date):
                         sl = min(can["low"] for can in cl[-12:]) - sl_buff
                         sl_p = (te - sl) / pip_size
                         if 3.0 <= sl_p <= max_sl_p:
-                            open_trade = {"type": "BUY", "entry": te, "sl": l, "original_sl": sl, "tp": te + (te - sl) * config.TP_RATIO}
+                            open_trade = {"type": "BUY", "entry": te, "sl": sl, "original_sl": sl, "tp": te + (te - sl) * config.TP_RATIO}
                             break
     return monthly_trades
 
 def run_backtest():
     if not initialize_mt5(): return
     
-    print(f"🚀 Starting 1-Year Audit ({YEAR_TO_TEST})...")
+    print(f"🚀 Starting Rolling 12-Month Audit...")
     
-    # Pre-fetch all data to avoid repeating work
     symbol_data_cache = {}
+    total_min_date = datetime.now()
+    
     for symbol in config.SYMBOLS:
-        print(f"📥 Loading {symbol} data...")
-        df_m5, df_h1 = get_symbol_data(symbol, datetime(YEAR_TO_TEST, 1, 1), datetime(YEAR_TO_TEST, 12, 31, 23, 59))
+        print(f"📥 Loading {symbol}...", end="\r")
+        df_m5, df_h1 = get_symbol_data(symbol, days_back=365)
         if df_m5 is not None and not df_m5.empty:
-            print(f"   ✅ Loaded {len(df_m5)} M5 candles.")
             symbol_data_cache[symbol] = (df_m5, df_h1)
-        else:
-            print(f"   ⚠️ No data found for {symbol} in {YEAR_TO_TEST}.")
+            total_min_date = min(total_min_date, df_m5.index.min())
+
+    if not symbol_data_cache:
+        print("❌ Error: No historical data available on this broker.")
+        mt5.shutdown(); return
+
+    print(f"✅ Data found starting from: {total_min_date.strftime('%Y-%m-%d')}")
+    
+    # Generate list of months to test from total_min_date to now
+    test_months = []
+    curr = total_min_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    now = datetime.now()
+    while curr <= now:
+        month_end = curr.replace(day=calendar.monthrange(curr.year, curr.month)[1], hour=23, minute=59)
+        test_months.append((curr, month_end))
+        next_m = curr.month + 1; next_y = curr.year
+        if next_m > 12: next_m = 1; next_y += 1
+        curr = curr.replace(year=next_y, month=next_m)
 
     monthly_reports = []
+    print(f"{'MONTH':<12} | {'TRADES':<6} | {'WR':<6} | {'PROFIT':<10} | {'BEST DAY':<8} | {'CONSISTENCY'}")
+    print("-" * 85)
 
-    for month in range(1, 13):
-        start_date = datetime(YEAR_TO_TEST, month, 1)
-        last_day = calendar.monthrange(YEAR_TO_TEST, month)[1]
-        end_date = datetime(YEAR_TO_TEST, month, last_day, 23, 59)
-        
-        print(f"📅 Simulating {calendar.month_name[month]}...", end="\r")
-        trades = run_monthly_backtest(symbol_data_cache, start_date, end_date)
+    all_time_profit = 0
+    total_trades_count = 0
+
+    for m_start, m_end in test_months:
+        trades = run_monthly_backtest(symbol_data_cache, m_start, m_end)
         
         total_pnl = sum(t["pnl"] for t in trades)
         daily_profits = {}
@@ -187,32 +204,22 @@ def run_backtest():
             day = t["time"].strftime("%Y-%m-%d")
             daily_profits[day] = daily_profits.get(day, 0) + t["pnl"]
         
-        best_day = max(daily_profits.values()) if daily_profits else 0
-        consistency_pct = (best_day / total_pnl * 100) if total_pnl > 0 else 0
+        max_win_day = max(daily_profits.values()) if daily_profits else 0
+        consistency_pct = (max_win_day / total_pnl * 100) if total_pnl > 0 else 0
         wr = (len([t for t in trades if t["pnl"] > 0]) / len(trades) * 100) if trades else 0
-
-        monthly_reports.append({
-            "Month": calendar.month_name[month],
-            "Trades": len(trades),
-            "WinRate": f"{wr:.1f}%",
-            "Profit": f"${total_pnl:,.2f}",
-            "BestDay": f"{consistency_pct:.1f}%",
-            "Pass": "✅" if consistency_pct <= 30.0 and total_pnl >= 0 else "❌"
-        })
+        
+        status = "✅" if consistency_pct <= 30.0 and total_pnl >= 0 else ("❌" if total_pnl > 0 else "⚪")
+        
+        month_name = m_start.strftime("%B %Y")
+        print(f"{month_name:<12} | {len(trades):<6} | {wr:>5.1f}% | ${total_pnl:>8.2f} | {consistency_pct:>7.1f}% | {status}")
+        
+        monthly_reports.append(total_pnl)
+        all_time_profit += total_pnl
+        total_trades_count += len(trades)
 
     mt5.shutdown()
-
-    # Final Report
-    print("\n\n" + "="*85)
-    print(f"{'MONTH':<12} | {'TRADES':<6} | {'WR':<6} | {'PROFIT':<10} | {'BEST DAY':<8} | {'CONSISTENCY'}")
     print("-" * 85)
-    for r in monthly_reports:
-        print(f"{r['Month']:<12} | {r['Trades']:<6} | {r['WinRate']:<6} | {r['Profit']:<10} | {r['BestDay']:<8} | {r['Pass']}")
-    print("-" * 85)
-    
-    overall_profit = sum(float(r["Profit"].replace("$", "").replace(",", "")) for r in monthly_reports)
-    avg_trades = sum(r["Trades"] for r in monthly_reports) / 12
-    print(f"🏆 1-YEAR TOTAL PROFIT: ${overall_profit:,.2f} | AVG TRADES/MO: {avg_trades:.1f}")
+    print(f"🏆 TOTAL PROFIT: ${all_time_profit:,.2f} | TRADES: {total_trades_count} | AVG/MO: {total_trades_count/len(test_months):.1f}")
     print("="*85)
 
 if __name__ == "__main__":
