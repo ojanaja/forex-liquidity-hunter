@@ -19,23 +19,24 @@ MT5_PATH = os.getenv("MT5_PATH", None)  # Optional: path to terminal64.exe
 # ACCOUNT RULES (WeMasterTrade 10k Prop Firm)
 # ─── Risk Management ──────────────────────────────────────────────────────────
 ACCOUNT_BALANCE         = 10000.0  # Default evaluation balance
-MAX_RISK_PER_TRADE_PCT  = 0.5      # 0.5% risk per trade ($50)
-DAILY_LOSS_LIMIT        = 150.0    # Stop trading if down $150 in a day
+MAX_RISK_PER_TRADE_PCT  = 0.6      # Slightly higher risk ($60)
+DAILY_LOSS_LIMIT        = 180.0    # Protect against 3 losses ($60*3)
 TOTAL_LOSS_LIMIT        = 350.0    # Stop trading if down $350 total
-PROFIT_TARGET           = 1200.0   # Aim higher to hit $1000 safely
-DAILY_PROFIT_CAP        = 350.0    # Adjusted for $1200 target (approx 30%)
-MAX_OPEN_TRADES         = 2        # Allow capturing simultaneous opportunities
+PROFIT_TARGET           = 1000.0   # Target for WD
+DAILY_PROFIT_CAP        = 300.0    # 30% consistency rule ($1000 * 0.3)
+MAX_OPEN_TRADES         = 1        # Revert to 1 at a time for safety
 
-# ─── Strategy Parameters (Optimized V12) ──────────────────────────────────────
+# ─── Strategy Parameters (Golden Rule V13) ────────────────────────────────────
 SCAN_TIMEFRAME_MINUTES  = 5        # Entry checking interval
 RANGE_TIMEFRAME_MINUTES = 15       # Session range identification
-SWEEP_THRESHOLD_PIPS    = 0.8      # 0.8 pip sweep (Aggressive Growth)
+SWEEP_THRESHOLD_PIPS    = 1.0      # Proven 1.0 pip sweep
 FVG_MIN_SIZE_PIPS       = 0.2      # 0.2 pips minimum gap
 SL_BUFFER_PIPS          = 2.0      # 2.0 pips extra SL room
-TP_RATIO                = 1.8      # 1.8:1 Reward to Risk
+TP_RATIO                = 1.7      # Target 1.7:1 Reward to Risk
 AUTO_BREAK_EVEN         = True     # Protected trades
-BE_ACTIVATION_RATIO     = 1.2      # 1.2R before moving to BE
+BE_ACTIVATION_RATIO     = 1.3      # 1.3R before moving to BE
 USE_FVG_50_ENTRY        = True     # 50% Consequent Encroachment entry strategy
+
 
 
 # =============================================================================
