@@ -165,8 +165,11 @@ def run_backtest():
     for symbol in config.SYMBOLS:
         print(f"📥 Loading {symbol} data...")
         df_m5, df_h1 = get_symbol_data(symbol, datetime(YEAR_TO_TEST, 1, 1), datetime(YEAR_TO_TEST, 12, 31, 23, 59))
-        if df_m5 is not None:
+        if df_m5 is not None and not df_m5.empty:
+            print(f"   ✅ Loaded {len(df_m5)} M5 candles.")
             symbol_data_cache[symbol] = (df_m5, df_h1)
+        else:
+            print(f"   ⚠️ No data found for {symbol} in {YEAR_TO_TEST}.")
 
     monthly_reports = []
 
