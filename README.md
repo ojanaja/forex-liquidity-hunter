@@ -113,10 +113,17 @@ All parameters are in `config.py`. Key settings:
 To run this bot 24/7 without leaving your laptop on, you need a **Windows VPS** (Linux will not work because the MetaTrader5 Python library requires the actual Windows MT5 terminal to be installed).
 
 ### 1. Choose a VPS Provider
-Purchase a **Windows Server** VPS. Recommended specs:
-- **OS**: Windows Server 2019 or 2022 (or Windows 10/11)
-- **RAM**: Minimum 2 GB (4 GB recommended for MT5 + Python)
-- **VCPU**: 2+ Cores
+Purchase a **Windows Server** VPS. 
+
+| Spec | **Minimum (Demo Only)** | **Recommended (Production)** |
+| :--- | :--- | :--- |
+| **OS** | Windows Server 2012/2016 | Windows Server 2022 |
+| **RAM** | **1 GB** | **2 GB - 4 GB** |
+| **vCPU** | 1 Core | 2 Cores |
+| **Disk** | 20 GB SSD | 40 GB SSD |
+
+> [!WARNING]
+> Running on **1 GB RAM** is only for testing. Windows itself uses most of that memory, which may cause MT5 or the Python script to crash during high-market volatility. For a real Prop Firm account, always use at least **2 GB**.
 
 *Providers like Contabo, Vultr, or ForexVPS offer cheap Windows servers (~$10-15/month).*
 
