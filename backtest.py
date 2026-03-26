@@ -1,6 +1,6 @@
 """
-Forex Liquidity Hunter - Backtester v9 (OPTIMIZED)
-Testing: TP 2.0, Sweep 2.0, FVG 0.5, and BE at 1.5R.
+Forex Liquidity Hunter - Backtester v10 (FINAL)
+Synced with config.py ($1000 Goal, 30% Consistency).
 """
 import logging
 from collections import deque
@@ -21,17 +21,9 @@ logger = logging.getLogger(__name__)
 
 # ─── Settings ──────────────────────────────────────────────────────────────────
 START_DATE      = datetime(2026, 1, 1)
-END_DATE        = datetime(2026, 2, 28, 23, 59)
+END_DATE        = datetime(2026, 1, 31, 23, 59) # Test for 1 month as requested
 INITIAL_BALANCE = 10_000.0
 RISK_PER_TRADE  = 50.0
-
-# --- OPTIMIZED PARAMETERS ---
-OPT_TP_RATIO       = 2.0  # Reduced from 3.0
-OPT_SWEEP_PIPS      = 2.0  # Reduced from 3.0 (increase frequency)
-OPT_FVG_PIPS        = 0.5  # Reduced from 1.0 (increase frequency)
-OPT_BE_TRIGGER      = 1.5  # Increase from 1.0R (more breathing room)
-# ----------------------------
-
 BROKER_TO_WIB   = 4
 
 def initialize_mt5():
@@ -66,7 +58,7 @@ def run_backtest():
     
     all_trades = []
     symbols_to_test = config.SYMBOLS
-    print(f"🚀 Starting Optimized Backtest (Jan-Feb 2026)...")
+    print(f"🚀 Starting Final Backtest for $1,000 Goal ({START_DATE.strftime('%B %Y')})...")
 
     for symbol in symbols_to_test:
         print(f"📊 Testing {symbol}...")
@@ -77,8 +69,8 @@ def run_backtest():
         if not info: continue
         
         pip_size = info.point * 10 if info.digits in (3, 5) else info.point
-        thresh = OPT_SWEEP_PIPS * pip_size
-        fvg_min = OPT_FVG_PIPS * pip_size
+        thresh = config.SWEEP_THRESHOLD_PIPS * pip_size
+        fvg_min = config.FVG_MIN_SIZE_PIPS * pip_size
         sl_buff = config.SL_BUFFER_PIPS * pip_size
         max_sl_p = 1000.0 if "XAU" in symbol else 50.0
 
@@ -106,12 +98,12 @@ def run_backtest():
                 if t["type"] == "BUY":
                     if l <= t["sl"]: exit_p = t["sl"]
                     elif h >= t["tp"]: exit_p = t["tp"]
-                    elif config.AUTO_BREAK_EVEN and (h - t["entry"]) >= (r_dist * OPT_BE_TRIGGER):
+                    elif config.AUTO_BREAK_EVEN and (h - t["entry"]) >= (r_dist * config.BE_ACTIVATION_RATIO):
                         t["sl"] = max(t["sl"], t["entry"])
                 else:
                     if h >= t["sl"]: exit_p = t["sl"]
                     elif l <= t["tp"]: exit_p = t["tp"]
-                    elif config.AUTO_BREAK_EVEN and (t["entry"] - l) >= (r_dist * OPT_BE_TRIGGER):
+                    elif config.AUTO_BREAK_EVEN and (t["entry"] - l) >= (r_dist * config.BE_ACTIVATION_RATIO):
                         t["sl"] = min(t["sl"], t["entry"])
 
                 if exit_p is not None:
@@ -156,7 +148,7 @@ def run_backtest():
                         sl_p = (sl - te) / pip_size
                         if 3.0 <= sl_p <= max_sl_p:
                             lots = calculate_lots(RISK_PER_TRADE, sl-te, info)
-                            open_trade = {"type": "SELL", "entry": te, "sl": sl, "original_sl": sl, "tp": te - (sl - te) * OPT_TP_RATIO, "lots": lots}
+                            open_trade = {"type": "SELL", "entry": te, "sl": sl, "original_sl": sl, "tp": te - (sl - te) * config.TP_RATIO, "lots": lots}
                             break
                 elif last_sweep_type == "LOW" and bias == "BULLISH":
                     if (newer["low"] - older["high"]) >= fvg_min:
@@ -165,7 +157,7 @@ def run_backtest():
                         sl_p = (te - sl) / pip_size
                         if 3.0 <= sl_p <= max_sl_p:
                             lots = calculate_lots(RISK_PER_TRADE, te-sl, info)
-                            open_trade = {"type": "BUY", "entry": te, "sl": sl, "original_sl": sl, "tp": te + (te - sl) * OPT_TP_RATIO, "lots": lots}
+                            open_trade = {"type": "BUY", "entry": te, "sl": sl, "original_sl": sl, "tp": te + (te - sl) * config.TP_RATIO, "lots": lots}
                             break
     mt5.shutdown()
 
@@ -180,7 +172,18 @@ def run_backtest():
     
     total_pnl = sum(t["pnl"] for t in all_trades)
     wr = (len([t for t in all_trades if t["pnl"] > 0]) / len(all_trades) * 100) if all_trades else 0
-    print(f"🏆 OPTIMIZED PROFIT: ${total_pnl:,.2f} | TRADES: {len(all_trades)} | WR: {wr:.1f}%")
+    print(f"🏆 FINAL PROFIT: ${total_pnl:,.2f} | TRADES: {len(all_trades)} | WR: {wr:.1f}%")
+
+    # Consistency Check
+    daily_profits = {}
+    for t in all_trades:
+        day = t["time"][:5] # mm-dd
+        daily_profits[day] = daily_profits.get(day, 0) + t["pnl"]
+    
+    max_day = max(daily_profits.values()) if daily_profits else 0
+    consistency_pct = (max_day / total_pnl * 100) if total_pnl > 0 else 0
+    print(f"📊 Worst Day PNL: ${max_day:.2f} ({consistency_pct:.1f}% of total)")
+    print(f"✅ Consistency Pass: {consistency_pct <= 30.0}")
     print("="*80)
 
 if __name__ == "__main__":

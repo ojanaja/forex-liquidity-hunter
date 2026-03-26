@@ -17,24 +17,25 @@ MT5_PATH = os.getenv("MT5_PATH", None)  # Optional: path to terminal64.exe
 
 # =============================================================================
 # ACCOUNT RULES (WeMasterTrade 10k Prop Firm)
-# =============================================================================
-ACCOUNT_BALANCE = 10_000.0
+# ─── Risk Management ──────────────────────────────────────────────────────────
+ACCOUNT_BALANCE         = 10000.0  # Default evaluation balance
+MAX_RISK_PER_TRADE_PCT  = 0.5      # 0.5% risk per trade ($50)
+DAILY_LOSS_LIMIT        = 150.0    # Stop trading if down $150 in a day
+TOTAL_LOSS_LIMIT        = 350.0    # Stop trading if down $350 total
+PROFIT_TARGET           = 1000.0   # Target for WD
+DAILY_PROFIT_CAP        = 300.0    # 30% consistency rule enforcement ($1000 * 0.3)
+MAX_OPEN_TRADES         = 1        # One at a time for maximum focus
 
-# Daily Loss < $200 → we use $150 as safe buffer
-DAILY_LOSS_LIMIT = 150.0
-
-# Total Loss < $400 → we use $350 as safe buffer
-TOTAL_LOSS_LIMIT = 350.0
-
-# Daily profit cap to maintain Profit Consistency ≤ 30%
-# $600 target / 20 days = $30 avg. Cap at $120 so no single day > 20% of total
-DAILY_PROFIT_CAP = 120.0
-
-# Max risk per trade as percentage of balance
-MAX_RISK_PER_TRADE_PCT = 0.5  # 0.5% = $50 per trade on 10k
-
-# Profit target for withdrawal
-PROFIT_TARGET = 600.0
+# ─── Strategy Parameters (Optimized) ──────────────────────────────────────────
+SCAN_TIMEFRAME_MINUTES  = 5        # Entry checking interval
+RANGE_TIMEFRAME_MINUTES = 15       # Session range identification
+SWEEP_THRESHOLD_PIPS    = 1.5      # 1.5 pips sweep for higher sensitivity
+FVG_MIN_SIZE_PIPS       = 0.5      # 0.5 pips minimum gap
+SL_BUFFER_PIPS          = 2.0      # 2.0 pips extra SL room
+TP_RATIO                = 2.0      # Target 2:1 Reward to Risk
+AUTO_BREAK_EVEN         = True     # Protected trades
+BE_ACTIVATION_RATIO     = 1.5      # 1.5R before moving to BE
+USE_FVG_50_ENTRY        = True     # 50% Consequent Encroachment entry strategy
 
 # =============================================================================
 # SESSION WINDOWS (UTC+7 / WIB)
