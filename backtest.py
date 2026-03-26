@@ -1,6 +1,6 @@
 """
-Forex Liquidity Hunter - Multi-Symbol Backtester v7
-Supports custom date ranges (e.g. January 2026).
+Forex Liquidity Hunter - Multi-Symbol Backtester v8
+Includes detailed Trade History (Lots, Entry, SL, TP, PnL).
 """
 import logging
 from collections import deque
@@ -20,7 +20,6 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 # ─── Settings ──────────────────────────────────────────────────────────────────
-# Set your backtest range here
 START_DATE      = datetime(2026, 1, 1)
 END_DATE        = datetime(2026, 2, 28, 23, 59)
 INITIAL_BALANCE = 10_000.0
@@ -35,40 +34,43 @@ def initialize_mt5():
     return True
 
 def get_symbol_data(symbol, start, end):
-    # Fetch extra 2 days for buffers/EMA
     fetch_start = start - timedelta(days=2)
     rates_m5 = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M5, fetch_start, end)
     rates_h1 = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_H1, fetch_start, end)
-    
     if rates_m5 is None or rates_h1 is None: return None, None
-    
     df_m5 = pd.DataFrame(rates_m5)
     df_m5["time"] = pd.to_datetime(df_m5["time"], unit="s")
     df_m5.set_index("time", inplace=True)
-    
     df_h1 = pd.DataFrame(rates_h1)
     df_h1["time"] = pd.to_datetime(df_h1["time"], unit="s")
     df_h1.set_index("time", inplace=True)
     df_h1['ema'] = df_h1['close'].ewm(span=config.HTF_EMA_PERIOD, adjust=False).mean()
-    
     return df_m5, df_h1
+
+def calculate_lots(risk, sl_dist, sym_info):
+    if sl_dist <= 0: return 0.01
+    # Simplified pip value: 1.0 lot * $1.00 move on $100k account normally
+    # But for MT5, we use tick_value
+    pip_val = sym_info.trade_tick_value / sym_info.point * (sym_info.point * 10 if sym_info.digits in (3,5) else sym_info.point)
+    raw_lots = risk / ( (sl_dist / (sym_info.point * 10 if sym_info.digits in (3,5) else sym_info.point)) * pip_val )
+    return max(sym_info.volume_min, min(round(raw_lots, 2), sym_info.volume_max))
 
 def run_backtest():
     if not initialize_mt5(): return
     
     all_trades = []
-    
     symbols_to_test = config.SYMBOLS
-    print(f"🚀 Starting Backtest from {START_DATE.date()} to {END_DATE.date()}...")
+    print(f"🚀 Starting Extended Backtest for {len(symbols_to_test)} symbols...")
 
     for symbol in symbols_to_test:
         print(f"📊 Testing {symbol}...")
         df_m5, df_h1 = get_symbol_data(symbol, START_DATE, END_DATE)
-        if df_m5 is None:
-            print(f"⚠️ Skip {symbol}: No data")
-            continue
-
-        pip_size = 0.01 if "XAU" in symbol or "JPY" in symbol else 0.0001
+        if df_m5 is None: continue
+        
+        info = mt5.symbol_info(symbol)
+        if not info: continue
+        
+        pip_size = info.point * 10 if info.digits in (3, 5) else info.point
         thresh = config.SWEEP_THRESHOLD_PIPS * pip_size
         fvg_min = config.FVG_MIN_SIZE_PIPS * pip_size
         sl_buff = config.SL_BUFFER_PIPS * pip_size
@@ -77,8 +79,7 @@ def run_backtest():
         range_buf = deque(maxlen=288)
         fvg_buf   = deque(maxlen=24)
         active_s_h, active_s_l = None, None
-        last_sweep_type = None
-        sweep_expiry = datetime.min
+        last_sweep_type = None; sweep_expiry = datetime.min
         open_trade = None
 
         for ts, row in df_m5.iterrows():
@@ -86,8 +87,7 @@ def run_backtest():
             candle = {"high": h, "low": l, "open": o, "close": c}
             range_buf.append(candle)
             fvg_buf.append(candle)
-
-            if ts < START_DATE: continue # Skip preamble data used only for buffers
+            if ts < START_DATE: continue
 
             wib = ts + timedelta(hours=BROKER_TO_WIB)
             t_str = wib.strftime("%H:%M")
@@ -110,7 +110,16 @@ def run_backtest():
                     p_pips = (exit_p - t["entry"]) / pip_size if t["type"] == "BUY" else (t["entry"] - exit_p) / pip_size
                     r_pips = abs(t["entry"] - t["original_sl"]) / pip_size
                     pnl = (p_pips / r_pips) * RISK_PER_TRADE if r_pips > 0 else 0
-                    all_trades.append({"symbol": symbol, "pnl": pnl, "time": ts, "type": t["type"]})
+                    all_trades.append({
+                        "time": ts.strftime("%Y-%m-%d %H:%M"),
+                        "symbol": symbol,
+                        "type": t["type"],
+                        "entry": t["entry"],
+                        "sl": t["original_sl"],
+                        "tp": t["tp"],
+                        "lots": t["lots"],
+                        "pnl": pnl
+                    })
                     open_trade = None; last_sweep_type = None; sweep_expiry = datetime.min
                 continue
 
@@ -118,18 +127,15 @@ def run_backtest():
             if in_window and active_s_h is None and len(range_buf) >= 200:
                 active_s_h = max(can["high"] for can in list(range_buf)[:-1])
                 active_s_l = min(can["low"]  for can in list(range_buf)[:-1])
-            
             if not in_window:
                 active_s_h, active_s_l = None, None; last_sweep_type = None; sweep_expiry = datetime.min
                 continue
-
             if active_s_h is None: continue
 
             h1_ts = ts.replace(minute=0, second=0)
             bias = "NEUTRAL"
             if h1_ts in df_h1.index:
-                ema_val = df_h1.loc[h1_ts, 'ema']
-                bias = "BULLISH" if c > ema_val else "BEARISH"
+                bias = "BULLISH" if c > df_h1.loc[h1_ts, 'ema'] else "BEARISH"
 
             if h >= active_s_h + thresh:
                 last_sweep_type = "HIGH"; sweep_expiry = ts + timedelta(minutes=60)
@@ -148,7 +154,8 @@ def run_backtest():
                         sl = max(can["high"] for can in cl[-12:]) + sl_buff
                         sl_p = (sl - te) / pip_size
                         if 3.0 <= sl_p <= max_sl_p:
-                            open_trade = {"type": "SELL", "entry": te, "sl": sl, "original_sl": sl, "tp": te - (sl - te) * config.TP_RATIO}
+                            lots = calculate_lots(RISK_PER_TRADE, sl-te, info)
+                            open_trade = {"type": "SELL", "entry": te, "sl": sl, "original_sl": sl, "tp": te - (sl - te) * config.TP_RATIO, "lots": lots}
                             break
                 elif last_sweep_type == "LOW" and bias == "BULLISH":
                     if (newer["low"] - older["high"]) >= fvg_min:
@@ -156,23 +163,22 @@ def run_backtest():
                         sl = min(can["low"] for can in cl[-12:]) - sl_buff
                         sl_p = (te - sl) / pip_size
                         if 3.0 <= sl_p <= max_sl_p:
-                            open_trade = {"type": "BUY", "entry": te, "sl": sl, "original_sl": sl, "tp": te + (te - sl) * config.TP_RATIO}
+                            lots = calculate_lots(RISK_PER_TRADE, te-sl, info)
+                            open_trade = {"type": "BUY", "entry": te, "sl": sl, "original_sl": sl, "tp": te + (te - sl) * config.TP_RATIO, "lots": lots}
                             break
-
     mt5.shutdown()
-    
-    total_trades = len(all_trades)
-    wins = [t for t in all_trades if t["pnl"] > 0]
+
+    # Final History
+    print("\n" + "="*110)
+    print(f"{'TIME':<18} | {'SYM':<8} | {'TYPE':<4} | {'LOTS':<5} | {'ENTRY':<10} | {'SL':<10} | {'TP':<10} | {'PNL':<6}")
+    print("-" * 110)
+    for t in all_trades:
+        res = f"${t['pnl']:+7.2f}"
+        print(f"{t['time']:<18} | {t['symbol']:<8} | {t['type']:<4} | {t['lots']:<5.2f} | {t['entry']:<10.5f} | {t['sl']:<10.5f} | {t['tp']:<10.5f} | {res}")
+    print("="*110)
+
     total_pnl = sum(t["pnl"] for t in all_trades)
-    
-    print("\n" + "="*60)
-    print(f"🏆 REPORT: {START_DATE.strftime('%Y-%m-%d')} to {END_DATE.strftime('%Y-%m-%d')}")
-    print("="*60)
-    print(f"Total Trades   : {total_trades}")
-    print(f"Win Rate       : {(len(wins)/total_trades*100 if total_trades else 0):.1f}%")
-    print(f"Net Profit     : ${total_pnl:,.2f} ({(total_pnl/INITIAL_BALANCE*100):.1f}%)")
-    print(f"Final Balance  : ${INITIAL_BALANCE + total_pnl:,.2f}")
-    print("="*60)
+    print(f"🏆 TOTAL PROFIT: ${total_pnl:,.2f} | TRADES: {len(all_trades)}")
 
 if __name__ == "__main__":
     run_backtest()
