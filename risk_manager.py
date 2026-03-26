@@ -84,14 +84,13 @@ class RiskManager:
             mt5_bridge.close_all_positions()
             return False
 
-        # Rule 4: Daily Profit Cap (consistency)
+        # Rule 4: Daily Profit Cap (consistency) - LOG ONLY per user request
         if total_daily_pnl >= config.DAILY_PROFIT_CAP:
-            self._stop_day(
-                f"Daily profit cap reached: +${total_daily_pnl:.2f} "
-                f"(cap: +${config.DAILY_PROFIT_CAP:.2f}). "
-                f"Securing consistency rule. 🎯"
+            logger.info(
+                f"🎯 Daily profit cap reached: +${total_daily_pnl:.2f}. "
+                f"Continuing trade per user preference."
             )
-            return False
+            # return False <-- Disabled to allow $600/month target achievement
 
         # Rule 5: Check open trade count
         open_positions = mt5_bridge.get_open_positions()
