@@ -1,6 +1,6 @@
 """
-Forex Liquidity Hunter - Multi-Symbol Backtester v8
-Includes detailed Trade History (Lots, Entry, SL, TP, PnL).
+Forex Liquidity Hunter - Backtester v9 (OPTIMIZED)
+Testing: TP 2.0, Sweep 2.0, FVG 0.5, and BE at 1.5R.
 """
 import logging
 from collections import deque
@@ -23,7 +23,15 @@ logger = logging.getLogger(__name__)
 START_DATE      = datetime(2026, 1, 1)
 END_DATE        = datetime(2026, 2, 28, 23, 59)
 INITIAL_BALANCE = 10_000.0
-RISK_PER_TRADE  = 50.0  # 0.5%
+RISK_PER_TRADE  = 50.0
+
+# --- OPTIMIZED PARAMETERS ---
+OPT_TP_RATIO       = 2.0  # Reduced from 3.0
+OPT_SWEEP_PIPS      = 2.0  # Reduced from 3.0 (increase frequency)
+OPT_FVG_PIPS        = 0.5  # Reduced from 1.0 (increase frequency)
+OPT_BE_TRIGGER      = 1.5  # Increase from 1.0R (more breathing room)
+# ----------------------------
+
 BROKER_TO_WIB   = 4
 
 def initialize_mt5():
@@ -49,8 +57,6 @@ def get_symbol_data(symbol, start, end):
 
 def calculate_lots(risk, sl_dist, sym_info):
     if sl_dist <= 0: return 0.01
-    # Simplified pip value: 1.0 lot * $1.00 move on $100k account normally
-    # But for MT5, we use tick_value
     pip_val = sym_info.trade_tick_value / sym_info.point * (sym_info.point * 10 if sym_info.digits in (3,5) else sym_info.point)
     raw_lots = risk / ( (sl_dist / (sym_info.point * 10 if sym_info.digits in (3,5) else sym_info.point)) * pip_val )
     return max(sym_info.volume_min, min(round(raw_lots, 2), sym_info.volume_max))
@@ -60,7 +66,7 @@ def run_backtest():
     
     all_trades = []
     symbols_to_test = config.SYMBOLS
-    print(f"🚀 Starting Extended Backtest for {len(symbols_to_test)} symbols...")
+    print(f"🚀 Starting Optimized Backtest (Jan-Feb 2026)...")
 
     for symbol in symbols_to_test:
         print(f"📊 Testing {symbol}...")
@@ -71,8 +77,8 @@ def run_backtest():
         if not info: continue
         
         pip_size = info.point * 10 if info.digits in (3, 5) else info.point
-        thresh = config.SWEEP_THRESHOLD_PIPS * pip_size
-        fvg_min = config.FVG_MIN_SIZE_PIPS * pip_size
+        thresh = OPT_SWEEP_PIPS * pip_size
+        fvg_min = OPT_FVG_PIPS * pip_size
         sl_buff = config.SL_BUFFER_PIPS * pip_size
         max_sl_p = 1000.0 if "XAU" in symbol else 50.0
 
@@ -95,30 +101,25 @@ def run_backtest():
             if open_trade:
                 t = open_trade
                 exit_p = None
+                r_dist = t["entry"] - t["original_sl"] if t["type"] == "BUY" else t["original_sl"] - t["entry"]
+                
                 if t["type"] == "BUY":
                     if l <= t["sl"]: exit_p = t["sl"]
                     elif h >= t["tp"]: exit_p = t["tp"]
-                    elif config.AUTO_BREAK_EVEN and (h - t["entry"]) >= (t["entry"] - t["original_sl"]):
+                    elif config.AUTO_BREAK_EVEN and (h - t["entry"]) >= (r_dist * OPT_BE_TRIGGER):
                         t["sl"] = max(t["sl"], t["entry"])
                 else:
                     if h >= t["sl"]: exit_p = t["sl"]
                     elif l <= t["tp"]: exit_p = t["tp"]
-                    elif config.AUTO_BREAK_EVEN and (t["entry"] - l) >= (t["original_sl"] - t["entry"]):
+                    elif config.AUTO_BREAK_EVEN and (t["entry"] - l) >= (r_dist * OPT_BE_TRIGGER):
                         t["sl"] = min(t["sl"], t["entry"])
 
                 if exit_p is not None:
                     p_pips = (exit_p - t["entry"]) / pip_size if t["type"] == "BUY" else (t["entry"] - exit_p) / pip_size
-                    r_pips = abs(t["entry"] - t["original_sl"]) / pip_size
-                    pnl = (p_pips / r_pips) * RISK_PER_TRADE if r_pips > 0 else 0
+                    pnl = (p_pips / (r_dist / pip_size)) * RISK_PER_TRADE
                     all_trades.append({
-                        "time": ts.strftime("%Y-%m-%d %H:%M"),
-                        "symbol": symbol,
-                        "type": t["type"],
-                        "entry": t["entry"],
-                        "sl": t["original_sl"],
-                        "tp": t["tp"],
-                        "lots": t["lots"],
-                        "pnl": pnl
+                        "time": ts.strftime("%m-%d %H:%M"), "symbol": symbol, "type": t["type"],
+                        "entry": t["entry"], "sl": t["original_sl"], "tp": t["tp"], "lots": t["lots"], "pnl": pnl
                     })
                     open_trade = None; last_sweep_type = None; sweep_expiry = datetime.min
                 continue
@@ -155,7 +156,7 @@ def run_backtest():
                         sl_p = (sl - te) / pip_size
                         if 3.0 <= sl_p <= max_sl_p:
                             lots = calculate_lots(RISK_PER_TRADE, sl-te, info)
-                            open_trade = {"type": "SELL", "entry": te, "sl": sl, "original_sl": sl, "tp": te - (sl - te) * config.TP_RATIO, "lots": lots}
+                            open_trade = {"type": "SELL", "entry": te, "sl": sl, "original_sl": sl, "tp": te - (sl - te) * OPT_TP_RATIO, "lots": lots}
                             break
                 elif last_sweep_type == "LOW" and bias == "BULLISH":
                     if (newer["low"] - older["high"]) >= fvg_min:
@@ -164,21 +165,23 @@ def run_backtest():
                         sl_p = (te - sl) / pip_size
                         if 3.0 <= sl_p <= max_sl_p:
                             lots = calculate_lots(RISK_PER_TRADE, te-sl, info)
-                            open_trade = {"type": "BUY", "entry": te, "sl": sl, "original_sl": sl, "tp": te + (te - sl) * config.TP_RATIO, "lots": lots}
+                            open_trade = {"type": "BUY", "entry": te, "sl": sl, "original_sl": sl, "tp": te + (te - sl) * OPT_TP_RATIO, "lots": lots}
                             break
     mt5.shutdown()
 
     # Final History
-    print("\n" + "="*110)
-    print(f"{'TIME':<18} | {'SYM':<8} | {'TYPE':<4} | {'LOTS':<5} | {'ENTRY':<10} | {'SL':<10} | {'TP':<10} | {'PNL':<6}")
-    print("-" * 110)
+    print("\n" + "="*80)
+    print(f"{'TIME':<12} | {'SYM':<8} | {'TYPE':<4} | {'LOTS':<4} | {'ENTRY':<8} | {'PNL':<6}")
+    print("-" * 80)
     for t in all_trades:
-        res = f"${t['pnl']:+7.2f}"
-        print(f"{t['time']:<18} | {t['symbol']:<8} | {t['type']:<4} | {t['lots']:<5.2f} | {t['entry']:<10.5f} | {t['sl']:<10.5f} | {t['tp']:<10.5f} | {res}")
-    print("="*110)
-
+        res = f"${t['pnl']:+6.2f}"
+        print(f"{t['time']:<12} | {t['symbol']:<8} | {t['type']:<4} | {t['lots']:<4.2f} | {t['entry']:<8.4f} | {res}")
+    print("-" * 80)
+    
     total_pnl = sum(t["pnl"] for t in all_trades)
-    print(f"🏆 TOTAL PROFIT: ${total_pnl:,.2f} | TRADES: {len(all_trades)}")
+    wr = (len([t for t in all_trades if t["pnl"] > 0]) / len(all_trades) * 100) if all_trades else 0
+    print(f"🏆 OPTIMIZED PROFIT: ${total_pnl:,.2f} | TRADES: {len(all_trades)} | WR: {wr:.1f}%")
+    print("="*80)
 
 if __name__ == "__main__":
     run_backtest()
