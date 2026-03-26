@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 
 # ─── Settings ──────────────────────────────────────────────────────────────────
 START_DATE      = datetime(2026, 1, 1)
-END_DATE        = datetime(2026, 1, 31, 23, 59) # Test for 1 month as requested
-INITIAL_BALANCE = 10_000.0
-RISK_PER_TRADE  = 50.0
+END_DATE        = datetime(2026, 1, 31, 23, 59)
+INITIAL_BALANCE = config.ACCOUNT_BALANCE
+RISK_PER_TRADE  = config.ACCOUNT_BALANCE * config.MAX_RISK_PER_TRADE_PCT / 100.0
 BROKER_TO_WIB   = 4
 
 def initialize_mt5():

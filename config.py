@@ -19,23 +19,24 @@ MT5_PATH = os.getenv("MT5_PATH", None)  # Optional: path to terminal64.exe
 # ACCOUNT RULES (WeMasterTrade 10k Prop Firm)
 # ─── Risk Management ──────────────────────────────────────────────────────────
 ACCOUNT_BALANCE         = 10000.0  # Default evaluation balance
-MAX_RISK_PER_TRADE_PCT  = 0.6      # Slightly higher risk ($60)
-DAILY_LOSS_LIMIT        = 180.0    # Protect against 3 losses ($60*3)
+MAX_RISK_PER_TRADE_PCT  = 0.5      # 0.5% risk per trade ($50)
+DAILY_LOSS_LIMIT        = 150.0    # Stop trading if down $150 in a day
 TOTAL_LOSS_LIMIT        = 350.0    # Stop trading if down $350 total
-PROFIT_TARGET           = 1000.0   # Target for WD
-DAILY_PROFIT_CAP        = 300.0    # 30% consistency rule ($1000 * 0.3)
-MAX_OPEN_TRADES         = 1        # Revert to 1 at a time for safety
+PROFIT_TARGET           = 600.0    # Reaching 6% month is a high-tier professional result
+DAILY_PROFIT_CAP        = 200.0    # Tight 30% consistency rule enforcement
+MAX_OPEN_TRADES         = 1        # Keep focus on best quality setup
 
-# ─── Strategy Parameters (Golden Rule V13) ────────────────────────────────────
+# ─── Strategy Parameters (Global Stable V11) ──────────────────────────────────
 SCAN_TIMEFRAME_MINUTES  = 5        # Entry checking interval
 RANGE_TIMEFRAME_MINUTES = 15       # Session range identification
-SWEEP_THRESHOLD_PIPS    = 1.0      # Proven 1.0 pip sweep
+SWEEP_THRESHOLD_PIPS    = 1.0      # Proven 1.0 pip sweep for high accuracy
 FVG_MIN_SIZE_PIPS       = 0.2      # 0.2 pips minimum gap
 SL_BUFFER_PIPS          = 2.0      # 2.0 pips extra SL room
-TP_RATIO                = 1.7      # Target 1.7:1 Reward to Risk
+TP_RATIO                = 1.5      # Stable 1.5:1 Reward to Risk
 AUTO_BREAK_EVEN         = True     # Protected trades
-BE_ACTIVATION_RATIO     = 1.3      # 1.3R before moving to BE
+BE_ACTIVATION_RATIO     = 1.1      # 1.1R before moving to BE
 USE_FVG_50_ENTRY        = True     # 50% Consequent Encroachment entry strategy
+
 
 
 
