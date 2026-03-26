@@ -23,18 +23,18 @@ MAX_RISK_PER_TRADE_PCT  = 0.5      # 0.5% risk per trade ($50)
 DAILY_LOSS_LIMIT        = 150.0    # Stop trading if down $150 in a day
 TOTAL_LOSS_LIMIT        = 350.0    # Stop trading if down $350 total
 PROFIT_TARGET           = 1000.0   # Target for WD
-DAILY_PROFIT_CAP        = 300.0    # 30% consistency rule enforcement ($1000 * 0.3)
+DAILY_PROFIT_CAP        = 250.0    # Hard cap at 25% for safety margin
 MAX_OPEN_TRADES         = 1        # One at a time for maximum focus
 
-# ─── Strategy Parameters (Optimized) ──────────────────────────────────────────
+# ─── Strategy Parameters (Optimized V11) ──────────────────────────────────────
 SCAN_TIMEFRAME_MINUTES  = 5        # Entry checking interval
 RANGE_TIMEFRAME_MINUTES = 15       # Session range identification
-SWEEP_THRESHOLD_PIPS    = 1.5      # 1.5 pips sweep for higher sensitivity
-FVG_MIN_SIZE_PIPS       = 0.5      # 0.5 pips minimum gap
+SWEEP_THRESHOLD_PIPS    = 1.0      # 1.0 pip sweep (very sensitive)
+FVG_MIN_SIZE_PIPS       = 0.2      # 0.2 pips minimum gap (almost any FVG)
 SL_BUFFER_PIPS          = 2.0      # 2.0 pips extra SL room
-TP_RATIO                = 2.0      # Target 2:1 Reward to Risk
+TP_RATIO                = 1.5      # 1.5:1 Reward to Risk (higher hit rate)
 AUTO_BREAK_EVEN         = True     # Protected trades
-BE_ACTIVATION_RATIO     = 1.5      # 1.5R before moving to BE
+BE_ACTIVATION_RATIO     = 1.1      # 1.1R before moving to BE
 USE_FVG_50_ENTRY        = True     # 50% Consequent Encroachment entry strategy
 
 # =============================================================================
