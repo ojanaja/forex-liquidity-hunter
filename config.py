@@ -41,7 +41,7 @@ HTF_EMA_PERIOD = 50           # Bias filter
 
 # SMC Logic
 SWEEP_THRESHOLD_PIPS = 2.0     # More significant sweep (was 1.0)
-FVG_MIN_SIZE_PIPS = 1.0        # Smallest gap to consider
+FVG_MIN_SIZE_PIPS = 1.5        # More convincing gap (was 1.0)
 TP_RATIO = 2.0                 # Target 1:2 RR
 
 # RSI Logic
