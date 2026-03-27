@@ -132,14 +132,11 @@ def main():
             session = get_active_session()
 
             if session is None:
-                # Outside session hours — sleep and wait
+                # Outside defined session hours, use current hour as session name
                 tz = pytz.timezone(config.TIMEZONE)
-                now = datetime.now(tz).strftime("%H:%M")
-                logger.debug(f"[{now}] Outside session windows. Sleeping 60s...")
-                time.sleep(60)
-                continue
-
-            logger.info(f"📍 Active session: {session}")
+                session = f"Global_{datetime.now(tz).strftime('%H')}"
+            
+            logger.info(f"📍 Scanning... [Session: {session}]")
 
             # --- Can we trade? (Risk Manager check) ---
             if not risk.can_trade():

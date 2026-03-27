@@ -275,6 +275,7 @@ def generate_signal(symbol: str) -> Optional[Signal]:
     spread_pips = (sym_info.spread * sym_info.point) / pip_size
 
     if spread_pips > config.MAX_SPREAD_PIPS:
+        logger.warning(f"⚠️ {symbol}: Spread too high ({spread_pips:.1f} pips). Skipping scan.")
         return None
 
     # Step 1: HTF Bias Filter
