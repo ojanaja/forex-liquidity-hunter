@@ -38,6 +38,7 @@ ADX_PERIOD = 14
 ADX_TRENDING_THRESHOLD = 30   # Stricter trend filter (was 25)
 HTF_TIMEFRAME_MINUTES = 60    # H1 context for EMA bias
 HTF_EMA_PERIOD = 50           # Bias filter
+USE_HTF_FILTER = True         # Higher probability filter
 
 # SMC Logic
 SWEEP_THRESHOLD_PIPS = 2.0     # More significant sweep (was 1.0)
