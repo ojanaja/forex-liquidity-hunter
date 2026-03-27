@@ -1,15 +1,17 @@
 """
-Forex Liquidity Hunter — Main Runner
-=====================================
-Entry point for the bot. Run on your Windows laptop:
+Forex Liquidity Hunter — Main Runner (V18 Disciplined Trader)
+==============================================================
+Entry point for the bot. Run on your Windows VPS:
     python main.py
 
 Flow:
   1. Connect to MT5
   2. Enter main loop
   3. Only scan for trades during session windows (Tokyo/London/NY)
-  4. Enforce all prop-firm rules via RiskManager
-  5. Log daily summary every 5 minutes
+  4. Enforce all discipline rules via RiskManager + MarketFilter
+  5. 6-point pre-entry validation gate
+  6. Auto break-even with commission/spread protection
+  7. Log daily summary every 5 minutes
 """
 import sys
 import os
@@ -91,19 +93,30 @@ def main():
     logger.info(
         r"""
   ╔═══════════════════════════════════════════════════╗
-  ║   FOREX LIQUIDITY HUNTER v1.7 (Multi-Strategy)    ║
+  ║   FOREX LIQUIDITY HUNTER v1.8 (Disciplined)       ║
   ║   SMC Sweep + Breakout + RSI Scalp                ║
-  ║   Account:  WeMasterTrade 10k                     ║
-  ║   Mode:     {'DRY RUN 🧪' if config.DRY_RUN else 'LIVE 🔴'}                              ║
+  ║   6-Point Validation Gate + Correlation Filter     ║
+  ║   Mode:     %s                              ║
   ╚═══════════════════════════════════════════════════╝
-    """
+    """ % ('DRY RUN' if config.DRY_RUN else 'LIVE')
     )
 
     if config.DRY_RUN:
         logger.info(
-            "⚠️  DRY_RUN mode is ON. No real trades will be placed. "
+            "DRY_RUN mode is ON. No real trades will be placed. "
             "Set DRY_RUN=False in config.py to go live."
         )
+
+    # Log bot rules
+    logger.info(
+        f"Bot Rules: "
+        f"Max {config.MAX_TRADES_PER_DAY} trades/day, "
+        f"Max {config.MAX_OPEN_TRADES} open, "
+        f"Risk {config.MAX_RISK_PER_TRADE_PCT}%/trade, "
+        f"Min RR 1:{config.MIN_RISK_REWARD_RATIO}, "
+        f"Min {config.MIN_CONFIRMATIONS} confirmations, "
+        f"Daily loss limit ${config.DAILY_LOSS_LIMIT}"
+    )
 
     # --- Connect to MT5 ---
     if not mt5_bridge.connect():
@@ -115,16 +128,16 @@ def main():
     risk.log_daily_summary()
 
     last_summary_time = time.time()
-    signals_today = 0
     _symbol_cooldowns: dict[str, float] = {}  # Tracks last trade time per symbol
 
     try:
         logger.info(
-            f"🕐 Bot started. Monitoring sessions: "
+            f"Bot started. Monitoring sessions: "
             f"{', '.join(s[0] for s in config.SESSIONS)}"
         )
+        logger.info(f"Pairs: {', '.join(config.SYMBOLS)}")
         logger.info(
-            f"📋 Pairs: {', '.join(config.SYMBOLS)}"
+            f"Correlation groups: {len(config.CORRELATION_GROUPS)} groups configured"
         )
 
         while True:
@@ -132,13 +145,13 @@ def main():
             session = get_active_session()
 
             if session is None:
-                # Outside defined session hours, use current hour as session name
+                # Outside defined session hours
                 tz = pytz.timezone(config.TIMEZONE)
                 session = f"Global_{datetime.now(tz).strftime('%H')}"
             
-            logger.info(f"📍 Scanning... [Session: {session}]")
+            logger.info(f"Scanning... [Session: {session}]")
 
-            # --- Can we trade? (Risk Manager check) ---
+            # --- Can we trade? (Risk Manager check, includes daily limit) ---
             if not risk.can_trade():
                 time.sleep(config.SCAN_INTERVAL_SECONDS)
                 continue
@@ -146,7 +159,7 @@ def main():
             # --- Scan each symbol for signals ---
             open_positions = mt5_bridge.get_open_positions()
             
-            # --- Auto Break-Even Manager ---
+            # --- Auto Break-Even Manager (with commission/spread) ---
             _manage_auto_break_even(open_positions)
             
             open_symbols = [p.symbol for p in open_positions]
@@ -156,7 +169,7 @@ def main():
                 if not risk.can_trade():
                     break
 
-                logger.info(f"🔍 Checking {symbol}...")
+                logger.info(f"Checking {symbol}...")
                 
                 # 1. Do we already have an open trade for this symbol?
                 if symbol in open_symbols:
@@ -168,10 +181,11 @@ def main():
                 if time.time() - last_trade_time < cooldown_seconds:
                     continue
 
-                signal = generate_signal(symbol)
+                # 3. Generate signal (includes full 6-point validation gate)
+                signal = generate_signal(symbol, risk_manager=risk)
 
                 if signal is None:
-                    continue  # No setup on this pair
+                    continue  # No valid setup on this pair
 
                 # --- Calculate lot size ---
                 lot_size = risk.calculate_lot_size(signal.sl_pips, symbol)
@@ -190,12 +204,12 @@ def main():
                 )
 
                 if ticket is not None:
-                    signals_today += 1
                     _symbol_cooldowns[symbol] = time.time()
                     logger.info(
-                        f"📈 Trade #{signals_today} placed: "
+                        f"Trade placed: "
                         f"{signal.direction} {lot_size} {symbol} "
-                        f"(Session: {session})"
+                        f"(Session: {session}, Reason: {signal.reason}, "
+                        f"RR: {signal.rr_ratio:.2f})"
                     )
 
             # --- Check for closed trades and update P/L ---
@@ -210,7 +224,7 @@ def main():
                 consistency = risk.check_profit_consistency()
                 if not consistency["passes"]:
                     logger.warning(
-                        f"⚠️ Profit consistency at risk! "
+                        f"Profit consistency at risk! "
                         f"Worst day: {consistency['worst_day_pct']}% of total "
                         f"(limit: 30%)"
                     )
@@ -221,16 +235,16 @@ def main():
             time.sleep(config.SCAN_INTERVAL_SECONDS)
 
     except KeyboardInterrupt:
-        logger.info("\n🛑 Bot stopped by user (Ctrl+C)")
+        logger.info("\nBot stopped by user (Ctrl+C)")
     except Exception as e:
-        logger.exception(f"💥 Unexpected error: {e}")
+        logger.exception(f"Unexpected error: {e}")
         # Emergency: close everything
         mt5_bridge.close_all_positions()
     finally:
         # --- End-of-run summary ---
         risk.log_daily_summary()
         mt5_bridge.disconnect()
-        logger.info("Bot shutdown complete. 👋")
+        logger.info("Bot shutdown complete.")
 
 
 # ======================================================================
@@ -243,6 +257,8 @@ _known_deals: set[int] = set()
 def _sync_closed_trades(risk: RiskManager):
     """
     Check MT5 deal history for newly closed trades and record their P/L.
+    Calculates NET profit = gross profit - (commission + swap).
+    Spread cost is already embedded in the entry/exit prices.
     """
     deals = mt5_bridge.get_daily_deals()
 
@@ -252,20 +268,32 @@ def _sync_closed_trades(risk: RiskManager):
             continue
 
         _known_deals.add(ticket)
-        net_profit = deal["profit"] + deal.get("commission", 0) + deal.get("swap", 0)
+
+        # NET PROFIT calculation (Req #5):
+        # commission and swap are typically negative values
+        gross_profit = deal["profit"]
+        commission = deal.get("commission", 0)
+        swap = deal.get("swap", 0)
+        net_profit = gross_profit + commission + swap
 
         if abs(net_profit) > 0.001:  # Skip zero-profit balance ops
+            logger.info(
+                f"Deal #{ticket}: Gross=${gross_profit:+.2f}, "
+                f"Commission=${commission:+.2f}, Swap=${swap:+.2f} "
+                f"=> Net=${net_profit:+.2f}"
+            )
             risk.record_trade(net_profit, deal.get("symbol", ""))
 
 
 # ======================================================================
-# Auto Break-Even Manager
+# Auto Break-Even Manager (with Commission + Spread Protection)
 # ======================================================================
 
 def _manage_auto_break_even(open_positions):
     """
-    Checks all open positions. If profit exceeds the risk threshold (e.g., 1R),
-    moves the Stop Loss to the original Entry Price.
+    Checks all open positions. If profit exceeds the risk threshold (e.g., 1.1R),
+    moves the Stop Loss to Entry Price + Commission + Spread.
+    This ensures the trade cannot result in a net loss even if SL is hit.
     """
     if not getattr(config, "AUTO_BREAK_EVEN", False):
         return
@@ -283,26 +311,62 @@ def _manage_auto_break_even(open_positions):
         if price is None:
             continue
 
+        sym_info = mt5_bridge.get_symbol_info(p.symbol)
+        if sym_info is None:
+            continue
+
+        pip_size = sym_info.point * 10 if sym_info.digits in (3, 5) else sym_info.point
+
         # Calculate 1R distance (Entry to original SL)
         risk_distance = abs(p.price_open - p.sl)
         
-        # Avoid division by zero if SL is exactly at entry (should be caught above)
+        # Avoid division by zero
         if risk_distance < 0.00001:
             continue
-            
+
+        # Calculate commission + spread buffer to add to BE level
+        # Commission per lot (divided by 2 for single direction approximate)
+        commission_per_lot = getattr(config, "ESTIMATED_COMMISSION_PER_LOT", 7.0)
+        spread_pips = getattr(config, "ESTIMATED_SPREAD_COST_PIPS", 1.5)
+
+        # Convert commission to price distance
+        # commission_distance = (commission_per_lot * volume) / (pip_value * volume) ≈ commission / pip_value
+        pip_value = sym_info.trade_tick_value * (pip_size / sym_info.point)
+        if pip_value > 0:
+            commission_distance = (commission_per_lot * p.volume) / (pip_value * p.volume) * pip_size
+        else:
+            commission_distance = 0
+
+        spread_distance = spread_pips * pip_size
+        be_buffer = commission_distance + spread_distance
+
         if p.type == 0:  # BUY
             current_profit_dist = price['bid'] - p.price_open
             rr_achieved = current_profit_dist / risk_distance
             
             if rr_achieved >= ratio_threshold:
-                mt5_bridge.modify_position_sl(p.ticket, p.price_open)
+                # BE level = entry + buffer (so even if hit, covers costs)
+                be_level = p.price_open + be_buffer
+                mt5_bridge.modify_position_sl(p.ticket, be_level)
+                logger.info(
+                    f"[BE] BUY {p.symbol} ticket {p.ticket}: "
+                    f"SL moved to {be_level:.5f} "
+                    f"(entry={p.price_open:.5f} + buffer={be_buffer:.5f})"
+                )
                 
         else:  # SELL
             current_profit_dist = p.price_open - price['ask']
             rr_achieved = current_profit_dist / risk_distance
             
             if rr_achieved >= ratio_threshold:
-                mt5_bridge.modify_position_sl(p.ticket, p.price_open)
+                # BE level = entry - buffer
+                be_level = p.price_open - be_buffer
+                mt5_bridge.modify_position_sl(p.ticket, be_level)
+                logger.info(
+                    f"[BE] SELL {p.symbol} ticket {p.ticket}: "
+                    f"SL moved to {be_level:.5f} "
+                    f"(entry={p.price_open:.5f} - buffer={be_buffer:.5f})"
+                )
 
 
 # ======================================================================

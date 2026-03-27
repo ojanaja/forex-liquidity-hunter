@@ -1,5 +1,5 @@
 """
-Forex Liquidity Hunter - Configuration
+Forex Liquidity Hunter - Configuration (V18 Disciplined Trader)
 All tunable parameters for the trading bot.
 """
 import os
@@ -16,58 +16,61 @@ MT5_SERVER = os.getenv("MT5_SERVER", "")
 MT5_PATH = os.getenv("MT5_PATH", None)  # Optional: path to terminal64.exe
 
 # =============================================================================
-# ACCOUNT RULES (WeMasterTrade 10k Prop Firm)
-# ─── Risk Management ──────────────────────────────────────────────────────────
+# ACCOUNT RULES
+# =============================================================================
 ACCOUNT_BALANCE         = 10000.0  # Default evaluation balance
-MAX_RISK_PER_TRADE_PCT  = 0.25     # Lowered to 0.25% for V15 Sniper-X (Allow 2 trades)
+MAX_RISK_PER_TRADE_PCT  = 1.0      # 1-2% risk per trade (Req #7)
 DAILY_LOSS_LIMIT        = 150.0    # Stop trading if down $150 in a day
 TOTAL_LOSS_LIMIT        = 350.0    # Stop trading if down $350 total
-PROFIT_TARGET           = 600.0    # Reaching 6% month is a high-tier professional result
-DAILY_PROFIT_CAP        = 200.0    # Tight 30% consistency rule enforcement
-# Max open trades (Increased to 2 for Sniper-X)
-MAX_OPEN_TRADES = 2
-
-# ─── Strategy Parameters (V15 Sniper-X Aggressive) ───────────────────────────
-SCAN_TIMEFRAME_MINUTES  = 1        # Fast M1 scanning
-RANGE_TIMEFRAME_MINUTES = 15       # Session range identification
-SWEEP_THRESHOLD_PIPS    = 0.5      # More sensitive 0.5 pip sweep
-FVG_MIN_SIZE_PIPS       = 0.2      # 0.2 pips minimum gap
-SL_BUFFER_PIPS          = 2.0      # 2.0 pips extra SL room
-TP_RATIO                = 1.5      # Stable 1.5:1 Reward to Risk
-AUTO_BREAK_EVEN         = True     # Protected trades
-BE_ACTIVATION_RATIO     = 1.1      # 1.1R before moving to BE
-USE_FVG_50_ENTRY        = True     # 50% Consequent Encroachment entry strategy
-
-
-
+PROFIT_TARGET           = 600.0    # 6% monthly target
+DAILY_PROFIT_CAP        = 200.0    # Consistency rule enforcement
 
 # =============================================================================
-# SESSION WINDOWS (UTC+7 / WIB)
+# DAILY TRADE LIMIT (Req #1)
 # =============================================================================
-# Format: (name, start_hour, start_minute, end_hour, end_minute)
-SESSIONS = [
-    ("Tokyo",   7,  0,   9,  0),   # 07:00 - 09:00 WIB
-    ("London", 15,  0,  17,  0),   # 15:00 - 17:00 WIB
-    ("NewYork", 20,  0,  22,  0),  # 20:00 - 22:00 WIB
-]
-
-TIMEZONE = "Asia/Jakarta"  # UTC+7
+MAX_TRADES_PER_DAY = 3             # Max 1-3 trades per day
+MAX_OPEN_TRADES    = 2             # Max simultaneous open trades
 
 # =============================================================================
-# TRADING PAIRS (Multi-Asset Global Selection)
+# HTF TREND FILTER (Req #2) — Dual EMA + Market Structure
 # =============================================================================
-SYMBOLS = [
-    "EURUSDx", "GBPUSDx", "USDJPYx", "EURJPYx", "GBPJPYx", "XAUUSDx",
-    "AUDUSDx", "NZDUSDx", "USDCADx", "USDCHFx", "EURGBPx", "EURAUDx", 
-    "AUDJPYx", "CADJPYx"
-]
+USE_HTF_FILTER          = True
+HTF_TIMEFRAME_MINUTES   = 60       # H1 for trend analysis
+HTF_EMA_FAST            = 50       # EMA 50
+HTF_EMA_SLOW            = 200      # EMA 200
+HTF_EMA_PERIOD          = 20       # Legacy single EMA (kept for backtest compat)
+HTF_STRUCTURE_LOOKBACK  = 20       # Candles to detect HH/HL/LH/LL
 
 # =============================================================================
-# STRATEGY MODULES (V17 Multi-Engine)
+# LTF CONFIRMATION (Req #2)
+# =============================================================================
+LTF_TIMEFRAME_MINUTES   = 5        # M5 for entry timing
+MIN_CONFIRMATIONS       = 2        # Need at least 2-3 confluences
+
+# =============================================================================
+# SIDEWAYS DETECTION (Req #3) — ATR + Bollinger Band Squeeze
+# =============================================================================
+ATR_PERIOD                  = 14
+ATR_LOW_VOLATILITY_FACTOR   = 0.5   # ATR < 50% of rolling avg = low vol
+BB_PERIOD                   = 20
+BB_STD_DEV                  = 2.0
+BB_SQUEEZE_THRESHOLD        = 0.003 # Band width / price < 0.3% = squeeze
+
+# =============================================================================
+# STRATEGY MODULES (V18 Multi-Engine)
 # =============================================================================
 ENABLE_SMC_SWEEP = True
 ENABLE_BREAKOUT  = True
 ENABLE_RSI_SCALP = True
+
+# --- Strategy Parameters ---
+SCAN_TIMEFRAME_MINUTES  = 1        # Fast M1 scanning
+RANGE_TIMEFRAME_MINUTES = 15       # Session range identification
+SWEEP_THRESHOLD_PIPS    = 0.5      # 0.5 pip sweep sensitivity
+FVG_MIN_SIZE_PIPS       = 0.2      # 0.2 pips minimum gap
+SL_BUFFER_PIPS          = 2.0      # 2.0 pips extra SL room
+TP_RATIO                = 2.0      # Updated to 1:2 minimum RR (Req #7)
+USE_FVG_50_ENTRY        = True     # 50% Consequent Encroachment
 
 # --- RSI Parameters ---
 RSI_PERIOD = 14
@@ -77,40 +80,56 @@ RSI_OS     = 30  # Oversold
 # --- Breakout Parameters ---
 BREAKOUT_CONFIRMATION_CANDLES = 2
 
-# =============================================================================
-# HIGHER TIMEFRAME (HTF) TREND FILTER
-# =============================================================================
-USE_HTF_FILTER = True
+# --- Minimum Risk Reward (Req #7) ---
+MIN_RISK_REWARD_RATIO = 2.0       # Minimum 1:2 RR required
 
-# The timeframe to check for the overall trend (e.g., H1 = 60 minutes)
-HTF_TIMEFRAME_MINUTES = 60
+# =============================================================================
+# AUTO BREAK-EVEN + COMMISSION (Req #4)
+# =============================================================================
+AUTO_BREAK_EVEN             = True
+BE_ACTIVATION_RATIO         = 1.1   # 1.1R before moving to BE
+ESTIMATED_COMMISSION_PER_LOT = 7.0  # $ per round-turn lot
+ESTIMATED_SPREAD_COST_PIPS  = 1.5   # Fallback spread cost in pips
 
-# The period of the Exponential Moving Average (EMA) to determine trend direction
-# Price above EMA = Bullish bias (Only look for buys)
-# Price below EMA = Bearish bias (Only look for sells)
-HTF_EMA_PERIOD = 20
+# =============================================================================
+# PAIR CORRELATION GROUPS (Req #6)
+# =============================================================================
+CORRELATION_GROUPS = [
+    ["EURUSDx", "GBPUSDx", "EURGBPx"],                              # EUR/GBP vs USD
+    ["USDJPYx", "EURJPYx", "GBPJPYx", "AUDJPYx", "CADJPYx"],       # JPY crosses
+    ["AUDUSDx", "NZDUSDx", "EURAUDx"],                              # AUD/NZD cluster
+    ["USDCADx", "USDCHFx"],                                         # USD longs
+    ["XAUUSDx"],                                                     # Gold standalone
+]
+MAX_POSITIONS_PER_CORRELATION_GROUP = 1
+
+# =============================================================================
+# SESSION WINDOWS (UTC+7 / WIB)
+# =============================================================================
+SESSIONS = [
+    ("Tokyo",   7,  0,   9,  0),   # 07:00 - 09:00 WIB
+    ("London", 15,  0,  17,  0),   # 15:00 - 17:00 WIB
+    ("NewYork", 20,  0,  22,  0),  # 20:00 - 22:00 WIB
+]
+TIMEZONE = "Asia/Jakarta"  # UTC+7
+
+# =============================================================================
+# TRADING PAIRS (Multi-Asset Global Selection)
+# =============================================================================
+SYMBOLS = [
+    "EURUSDx", "GBPUSDx", "USDJPYx", "EURJPYx", "GBPJPYx", "XAUUSDx",
+    "AUDUSDx", "NZDUSDx", "USDCADx", "USDCHFx", "EURGBPx", "EURAUDx",
+    "AUDJPYx", "CADJPYx"
+]
 
 # =============================================================================
 # SAFETY / EXECUTION
 # =============================================================================
-
-# DRY_RUN mode: True = log trades only, False = execute real trades
-DRY_RUN = False
-
-# Max open trades (Sniper-X/V17 Balance)
-MAX_OPEN_TRADES = 2
-
-# Max allowed spread in pips (80.0 for Gold compatibility)
-MAX_SPREAD_PIPS = 80.0
-
-# Cooldown to prevent rapid consecutive trades on the same symbol (in minutes)
-TRADE_COOLDOWN_MINUTES = 5
-
-# How often to check for signals (seconds)
-SCAN_INTERVAL_SECONDS = 10
-
-# How often to log the daily summary (seconds)
-SUMMARY_LOG_INTERVAL_SECONDS = 300  # 5 minutes
+DRY_RUN = False                    # True = log only, False = real trades
+MAX_SPREAD_PIPS = 80.0             # Max allowed spread (80.0 for Gold)
+TRADE_COOLDOWN_MINUTES = 5         # Cooldown per symbol (minutes)
+SCAN_INTERVAL_SECONDS = 10         # How often to check for signals
+SUMMARY_LOG_INTERVAL_SECONDS = 300 # 5 minutes
 
 # Logging
 LOG_DIR = "logs"

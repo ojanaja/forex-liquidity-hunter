@@ -1,9 +1,13 @@
 """
-Forex Liquidity Hunter - Strategy Module (V17 Multi-Engine)
-Implements 3 parallel strategies:
+Forex Liquidity Hunter - Strategy Module (V18 Disciplined Trader)
+=================================================================
+Implements 3 parallel strategies with full validation:
   1. SMC Liquidity Sweep (High Precision)
   2. Session Breakout (Aggressive Momentum)
   3. RSI Scalper (Mean Reversion)
+
+All signals must pass the 6-point pre-entry validation gate
+via market_filter.validate_entry() before being returned.
 """
 import logging
 from dataclasses import dataclass
@@ -13,6 +17,7 @@ import pandas as pd
 
 import config
 import mt5_bridge
+import market_filter
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +31,7 @@ class Signal:
     stop_loss: float
     take_profit: float
     sl_pips: float       # SL distance in pips (needed for lot sizing)
+    rr_ratio: float      # Risk-Reward ratio
     reason: str
 
 
@@ -137,9 +143,13 @@ def detect_breakout(symbol: str, session_high: float, session_low: float) -> Opt
     last_candle, prev_candle = df.iloc[-1], df.iloc[-2]
     
     if last_candle["close"] > session_high and prev_candle["close"] > session_high:
-        return {"type": "BREAKOUT_BUY", "entry": last_candle["close"], "sl": session_low, "tp": last_candle["close"] + (last_candle["close"] - session_low) * config.TP_RATIO}
+        sl = session_low
+        tp = last_candle["close"] + (last_candle["close"] - session_low) * config.TP_RATIO
+        return {"type": "BREAKOUT_BUY", "entry": last_candle["close"], "sl": sl, "tp": tp}
     if last_candle["close"] < session_low and prev_candle["close"] < session_low:
-        return {"type": "BREAKOUT_SELL", "entry": last_candle["close"], "sl": session_high, "tp": last_candle["close"] - (session_high - last_candle["close"]) * config.TP_RATIO}
+        sl = session_high
+        tp = last_candle["close"] - (session_high - last_candle["close"]) * config.TP_RATIO
+        return {"type": "BREAKOUT_SELL", "entry": last_candle["close"], "sl": sl, "tp": tp}
     return None
 
 
@@ -165,35 +175,37 @@ def detect_rsi_scalp(symbol: str) -> Optional[dict]:
     
     if last_rsi < config.RSI_OS:
         sl_price = last_candle["low"] - (config.SL_BUFFER_PIPS * pip_size)
-        return {"type": "RSI_OS_BUY", "entry": last_candle["close"], "sl": sl_price, "tp": last_candle["close"] + (last_candle["close"] - sl_price) * config.TP_RATIO}
+        tp_price = last_candle["close"] + (last_candle["close"] - sl_price) * config.TP_RATIO
+        return {"type": "RSI_OS_BUY", "entry": last_candle["close"], "sl": sl_price, "tp": tp_price}
     if last_rsi > config.RSI_OB:
         sl_price = last_candle["high"] + (config.SL_BUFFER_PIPS * pip_size)
-        return {"type": "RSI_OB_SELL", "entry": last_candle["close"], "sl": sl_price, "tp": last_candle["close"] - (sl_price - last_candle["close"]) * config.TP_RATIO}
+        tp_price = last_candle["close"] - (sl_price - last_candle["close"]) * config.TP_RATIO
+        return {"type": "RSI_OB_SELL", "entry": last_candle["close"], "sl": sl_price, "tp": tp_price}
     return None
 
 
 # ======================================================================
-# Step 6: HTF Bias Filter
+# Helper: Calculate RR ratio
 # ======================================================================
 
-def check_htf_bias(symbol: str) -> Optional[str]:
-    if not getattr(config, "USE_HTF_FILTER", False): return "NEUTRAL"
-    df = mt5_bridge.get_ohlc(symbol, timeframe_minutes=config.HTF_TIMEFRAME_MINUTES, count=config.HTF_EMA_PERIOD + 5)
-    if df is None or len(df) < config.HTF_EMA_PERIOD: return None
-    df['ema'] = df['close'].ewm(span=config.HTF_EMA_PERIOD, adjust=False).mean()
-    price = mt5_bridge.get_current_price(symbol)
-    if price is None: return None
-    last_ema = df['ema'].iloc[-1]
-    if price['ask'] > last_ema: return "BULLISH"
-    elif price['bid'] < last_ema: return "BEARISH"
-    return "NEUTRAL"
+def _calc_rr_ratio(entry: float, sl: float, tp: float) -> float:
+    """Calculate Risk-Reward ratio from entry, SL, TP."""
+    risk = abs(entry - sl)
+    reward = abs(tp - entry)
+    if risk <= 0:
+        return 0.0
+    return reward / risk
 
 
 # ======================================================================
-# Step 7: Main Signal Generator (Orchestrator)
+# Step 6: Main Signal Generator (Orchestrator)
 # ======================================================================
 
-def generate_signal(symbol: str) -> Optional[Signal]:
+def generate_signal(symbol: str, risk_manager=None) -> Optional[Signal]:
+    """
+    Master signal generator. Runs all strategy engines and validates
+    each signal through the 6-point pre-entry logic gate.
+    """
     sym_info = mt5_bridge.get_symbol_info(symbol)
     if sym_info is None: return None
     pip_size = sym_info.point * 10 if sym_info.digits in (3, 5) else sym_info.point
@@ -202,41 +214,93 @@ def generate_signal(symbol: str) -> Optional[Signal]:
     spread_pips = (sym_info.spread * sym_info.point) / pip_size
     if spread_pips > config.MAX_SPREAD_PIPS: return None
 
-    # Bias and Range
-    htf_bias = check_htf_bias(symbol)
-    if htf_bias is None: return None
+    # Session Range (needed for SMC + Breakout)
     range_data = identify_session_range(symbol)
     if range_data is None: return None
+
+    # --- Collect candidate signals from all strategies ---
+    candidates = []
 
     # --- STRATEGY A: SMC Sweep ---
     if getattr(config, "ENABLE_SMC_SWEEP", True):
         sweep = detect_sweep(symbol, range_data["high"], range_data["low"])
         if sweep:
-            if sweep["type"] == "HIGH_SWEPT" and htf_bias == "BULLISH": pass
-            elif sweep["type"] == "LOW_SWEPT" and htf_bias == "BEARISH": pass
-            else:
+            # Only proceed if sweep is counter-trend (reversal setup)
+            htf_trend = market_filter.get_htf_trend(symbol)
+            should_proceed = True
+            if htf_trend:
+                if sweep["type"] == "HIGH_SWEPT" and htf_trend == "UPTREND":
+                    should_proceed = False  # Don't sell in uptrend
+                elif sweep["type"] == "LOW_SWEPT" and htf_trend == "DOWNTREND":
+                    should_proceed = False  # Don't buy in downtrend
+
+            if should_proceed:
                 entry_data = detect_fvg_entry(symbol, sweep)
                 if entry_data:
-                    sl_pips = abs(entry_data["fvg_entry"] - entry_data["wick_tip"]) / pip_size
-                    return Signal(symbol, "BUY" if sweep["type"] == "LOW_SWEPT" else "SELL", 
-                                  entry_data["fvg_entry"], entry_data["wick_tip"], 
-                                  entry_data["fvg_entry"] + (entry_data["fvg_entry"] - entry_data["wick_tip"]) * config.TP_RATIO, 
-                                  sl_pips, f"SMC: {sweep['type']} + FVG")
+                    direction = "BUY" if sweep["type"] == "LOW_SWEPT" else "SELL"
+                    entry = entry_data["fvg_entry"]
+                    sl = entry_data["wick_tip"]
+                    sl_dist = abs(entry - sl)
+                    tp = entry + sl_dist * config.TP_RATIO if direction == "BUY" else entry - sl_dist * config.TP_RATIO
+                    sl_pips = sl_dist / pip_size
+                    rr = _calc_rr_ratio(entry, sl, tp)
+
+                    candidates.append(Signal(
+                        symbol, direction, entry, sl, tp,
+                        sl_pips, rr, f"SMC: {sweep['type']} + FVG"
+                    ))
 
     # --- STRATEGY B: Breakout ---
     if getattr(config, "ENABLE_BREAKOUT", False):
         brut = detect_breakout(symbol, range_data["high"], range_data["low"])
         if brut:
+            direction = "BUY" if "BUY" in brut["type"] else "SELL"
             sl_pips = abs(brut["entry"] - brut["sl"]) / pip_size
-            return Signal(symbol, "BUY" if "BUY" in brut["type"] else "SELL", 
-                          brut["entry"], brut["sl"], brut["tp"], sl_pips, f"Momentum: Session {brut['type']}")
+            rr = _calc_rr_ratio(brut["entry"], brut["sl"], brut["tp"])
+            candidates.append(Signal(
+                symbol, direction, brut["entry"], brut["sl"], brut["tp"],
+                sl_pips, rr, f"Momentum: Session {brut['type']}"
+            ))
 
     # --- STRATEGY C: RSI Scalp ---
     if getattr(config, "ENABLE_RSI_SCALP", False):
         rsi_s = detect_rsi_scalp(symbol)
         if rsi_s:
+            direction = "BUY" if "BUY" in rsi_s["type"] else "SELL"
             sl_pips = abs(rsi_s["entry"] - rsi_s["sl"]) / pip_size
-            return Signal(symbol, "BUY" if "BUY" in rsi_s["type"] else "SELL", 
-                          rsi_s["entry"], rsi_s["sl"], rsi_s["tp"], sl_pips, f"Scalp: {rsi_s['type']}")
+            rr = _calc_rr_ratio(rsi_s["entry"], rsi_s["sl"], rsi_s["tp"])
+            candidates.append(Signal(
+                symbol, direction, rsi_s["entry"], rsi_s["sl"], rsi_s["tp"],
+                sl_pips, rr, f"Scalp: {rsi_s['type']}"
+            ))
+
+    # --- Validate each candidate through the 6-point gate ---
+    for signal in candidates:
+        # RR pre-check (quick reject)
+        if signal.rr_ratio < config.MIN_RISK_REWARD_RATIO:
+            logger.info(
+                f"[REJECT] {symbol} {signal.reason}: "
+                f"RR {signal.rr_ratio:.2f} < {config.MIN_RISK_REWARD_RATIO}"
+            )
+            continue
+
+        # Full 6-point validation
+        valid, reason = market_filter.validate_entry(
+            symbol=signal.symbol,
+            direction=signal.direction,
+            rr_ratio=signal.rr_ratio,
+            risk_manager=risk_manager,
+        )
+
+        if valid:
+            logger.info(
+                f"[SIGNAL] {symbol} {signal.direction} via {signal.reason} "
+                f"(RR={signal.rr_ratio:.2f}, SL={signal.sl_pips:.1f} pips)"
+            )
+            return signal
+        else:
+            logger.info(
+                f"[REJECT] {symbol} {signal.reason}: {reason}"
+            )
 
     return None

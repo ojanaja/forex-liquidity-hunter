@@ -1,13 +1,15 @@
 """
-Forex Liquidity Hunter - Risk Manager
-Enforces all WeMasterTrade prop firm rules.
+Forex Liquidity Hunter - Risk Manager (V18 Disciplined Trader)
+Enforces all risk and discipline rules.
 
 Rules:
-  1. Daily Loss     < $200  (we stop at $150)
-  2. Total Loss     < $400  (we stop at $350)
-  3. Profit Ratio   >= 6%
-  4. Profit Consist <= 30%  (daily cap $120)
-  5. Risk Consist   < 2%    (max 0.5% per trade)
+  1. Daily Loss Limit
+  2. Total Loss Limit
+  3. Daily Trade Limit (max 1-3 trades/day)
+  4. Correlation Filter (max 1 position per group)
+  5. Risk per trade (1-2% of balance)
+  6. Profit Consistency (<= 30% single day)
+  7. Net Profit = Gross - (Commission + Spread + Swap)
 """
 import logging
 import json
@@ -84,13 +86,20 @@ class RiskManager:
             mt5_bridge.close_all_positions()
             return False
 
+        # Rule 3: Daily Trade Limit
+        max_daily = getattr(config, "MAX_TRADES_PER_DAY", 3)
+        if self.daily_trade_count >= max_daily:
+            logger.info(
+                f"Daily trade limit reached ({self.daily_trade_count}/{max_daily})"
+            )
+            return False
+
         # Rule 4: Daily Profit Cap (consistency) - LOG ONLY per user request
         if total_daily_pnl >= config.DAILY_PROFIT_CAP:
             logger.info(
                 f"🎯 Daily profit cap reached: +${total_daily_pnl:.2f}. "
                 f"Continuing trade per user preference."
             )
-            # return False <-- Disabled to allow $600/month target achievement
 
         # Rule 5: Check open trade count
         open_positions = mt5_bridge.get_open_positions()
@@ -151,6 +160,46 @@ class RiskManager:
             f"pip_val=${pip_value:.2f})"
         )
         return lots
+
+    # ===================================================================
+    # Correlation Filter (Req #6)
+    # ===================================================================
+
+    def check_correlation_filter(self, symbol: str) -> tuple[bool, str]:
+        """
+        Check if opening a position on `symbol` would violate correlation rules.
+        Returns (True, "OK") if allowed, (False, reason) if blocked.
+        """
+        groups = getattr(config, "CORRELATION_GROUPS", [])
+        max_per_group = getattr(config, "MAX_POSITIONS_PER_CORRELATION_GROUP", 1)
+
+        if not groups:
+            return True, "OK"
+
+        # Find which group(s) this symbol belongs to
+        symbol_groups = []
+        for group in groups:
+            if symbol in group:
+                symbol_groups.append(group)
+
+        if not symbol_groups:
+            return True, "OK"  # Symbol not in any group
+
+        # Get currently open positions
+        open_positions = mt5_bridge.get_open_positions()
+        open_symbols = set(p.symbol for p in open_positions)
+
+        for group in symbol_groups:
+            group_open_count = sum(1 for s in group if s in open_symbols)
+            if group_open_count >= max_per_group:
+                blocked_by = [s for s in group if s in open_symbols]
+                return False, (
+                    f"Correlation filter: {symbol} blocked — "
+                    f"group {group} already has {group_open_count} position(s): "
+                    f"{', '.join(blocked_by)}"
+                )
+
+        return True, "OK"
 
     # ===================================================================
     # Trade Recording
