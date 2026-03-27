@@ -82,7 +82,7 @@ HTF_EMA_PERIOD = 20
 # =============================================================================
 
 # DRY_RUN mode: True = log trades only, False = execute real trades
-DRY_RUN = True
+DRY_RUN = False
 
 # Max allowed spread in pips (skip trade if spread is wider)
 MAX_SPREAD_PIPS = 2.0

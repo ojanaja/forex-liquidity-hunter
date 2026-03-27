@@ -220,7 +220,7 @@ def place_order(
     lot_size: float,
     sl: float,
     tp: float,
-    comment: str = "LiqHunter",
+    comment: str = "",
 ) -> Optional[int]:
     """
     Place a market order.  Returns the order ticket or None on failure.
@@ -255,7 +255,7 @@ def place_order(
         "sl": sl,
         "tp": tp,
         "deviation": 10,
-        "magic": 20250325,
+        "magic": 0,
         "comment": comment,
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_IOC,
@@ -377,8 +377,8 @@ def close_all_positions() -> int:
             "position": pos.ticket,
             "price": close_price,
             "deviation": 10,
-            "magic": 20250325,
-            "comment": "LiqHunter_CLOSE",
+            "magic": 0,
+            "comment": "",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
