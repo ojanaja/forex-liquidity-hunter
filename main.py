@@ -62,18 +62,18 @@ def manage_existing_trades():
 
 
 def main():
+    mode_str = "DRY RUN" if config.DRY_RUN else "LIVE"
     logger.info(
-        r"""
-  ╔═══════════════════════════════════════════════════╗
-  ║   FOREX LIQUIDITY HUNTER v1.8 (Intelligence)      ║
-  ║   Regime Awareness + Smart Break-Even Plus        ║
-  ║   Account:  WeMasterTrade 10k                     ║
-  ║   Mode:     {'DRY RUN 🧪' if config.DRY_RUN else 'LIVE 🔴'}                              ║
-  ╚═══════════════════════════════════════════════════╝
-"""
+        f"\n"
+        f"---------------------------------------------------\n"
+        f"  FOREX LIQUIDITY HUNTER v1.8 (Intelligence)\n"
+        f"  Regime Awareness + Smart Break-Even Plus\n"
+        f"  Account:  WeMasterTrade 10k\n"
+        f"  Mode:     {mode_str}\n"
+        f"---------------------------------------------------\n"
     )
 
-    risk = RiskManager(account_balance=config.ACCOUNT_BALANCE)
+    risk = RiskManager()
     if not mt5_bridge.connect():
         logger.critical("Failed to connect to MT5. Exiting.")
         return
