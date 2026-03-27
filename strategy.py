@@ -69,6 +69,7 @@ def identify_session_range(
     low = range_df["low"].min()
     mid = (high + low) / 2.0
 
+    logger.info(f"📊 Range: High {high:.5f} | Low {low:.5f}")
     return {"high": high, "low": low, "mid": mid}
 
 

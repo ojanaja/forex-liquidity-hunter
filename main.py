@@ -159,6 +159,8 @@ def main():
                 if not risk.can_trade():
                     break
 
+                logger.info(f"🔍 Checking {symbol}...")
+                
                 # 1. Do we already have an open trade for this symbol?
                 if symbol in open_symbols:
                     continue
