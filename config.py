@@ -85,7 +85,8 @@ HTF_EMA_PERIOD = 20
 DRY_RUN = False
 
 # Max allowed spread in pips (skip trade if spread is wider)
-MAX_SPREAD_PIPS = 2.0
+# Note: For Gold, 10-50 pips spread is common on Prop Firms.
+MAX_SPREAD_PIPS = 80.0
 
 # Cooldown to prevent rapid consecutive trades on the same symbol (in minutes)
 TRADE_COOLDOWN_MINUTES = 15
