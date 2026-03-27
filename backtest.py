@@ -743,7 +743,301 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# REPORT & RUNNER
+# PROGRESS BAR UTILITIES
+# ══════════════════════════════════════════════════════════════════════════════
+
+import time as _time
+import sys as _sys
+import os as _os
+
+
+def _progress_bar(current, total, prefix="", width=40, start_time=None):
+    """Print an inline progress bar with ETA."""
+    pct = current / total if total > 0 else 1
+    filled = int(width * pct)
+    bar = "#" * filled + "-" * (width - filled)
+
+    eta_str = ""
+    if start_time and current > 0:
+        elapsed = _time.time() - start_time
+        eta = (elapsed / current) * (total - current)
+        if eta > 60:
+            eta_str = f" ETA: {eta/60:.1f}m"
+        else:
+            eta_str = f" ETA: {eta:.0f}s"
+
+    _sys.stdout.write(f"\r  {prefix} |{bar}| {pct*100:5.1f}% ({current}/{total}){eta_str}   ")
+    _sys.stdout.flush()
+    if current >= total:
+        print()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADVANCED EVALUATION REPORT
+# ══════════════════════════════════════════════════════════════════════════════
+
+def generate_advanced_report(all_trades, test_months, report_path):
+    """Generate comprehensive evaluation report — console + file."""
+    lines = []
+
+    def out(text=""):
+        lines.append(text)
+        print(text)
+
+    out("=" * 100)
+    out("  FOREX LIQUIDITY HUNTER V18 - ADVANCED BACKTEST REPORT")
+    out(f"  Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    out("=" * 100)
+
+    if not all_trades:
+        out("\n  No trades generated. Bot filters may be too strict.\n")
+        _save_report(lines, report_path)
+        return
+
+    # Basic Stats
+    total_trades = len(all_trades)
+    wins = [t for t in all_trades if t.net_pnl > 0]
+    losses = [t for t in all_trades if t.net_pnl <= 0]
+    total_gross = sum(t.gross_pnl for t in all_trades)
+    total_net = sum(t.net_pnl for t in all_trades)
+    total_commission = total_gross - total_net
+    win_rate = len(wins) / total_trades * 100 if total_trades else 0
+
+    avg_win = sum(t.net_pnl for t in wins) / len(wins) if wins else 0
+    avg_loss = sum(t.net_pnl for t in losses) / len(losses) if losses else 0
+    largest_win = max((t.net_pnl for t in all_trades), default=0)
+    largest_loss = min((t.net_pnl for t in all_trades), default=0)
+
+    wr_decimal = len(wins) / total_trades if total_trades else 0
+    expectancy = (wr_decimal * avg_win) + ((1 - wr_decimal) * avg_loss)
+
+    gross_wins = sum(t.net_pnl for t in wins) if wins else 0
+    gross_losses = abs(sum(t.net_pnl for t in losses)) if losses else 1
+    profit_factor = gross_wins / gross_losses if gross_losses > 0 else float('inf')
+
+    out("\n  1. PERFORMANCE SUMMARY")
+    out("  " + "-" * 50)
+    out(f"  Total Trades:      {total_trades}")
+    out(f"  Wins / Losses:     {len(wins)} / {len(losses)}")
+    out(f"  Win Rate:          {win_rate:.1f}%")
+    out(f"  Gross Profit:      ${total_gross:+,.2f}")
+    out(f"  Net Profit:        ${total_net:+,.2f}")
+    out(f"  Commission+Spread: ${total_commission:+,.2f}")
+    out(f"  Avg Win:           ${avg_win:+,.2f}")
+    out(f"  Avg Loss:          ${avg_loss:+,.2f}")
+    out(f"  Largest Win:       ${largest_win:+,.2f}")
+    out(f"  Largest Loss:      ${largest_loss:+,.2f}")
+    out(f"  Profit Factor:     {profit_factor:.2f}")
+    out(f"  Expectancy/Trade:  ${expectancy:+,.2f}")
+    if test_months:
+        out(f"  Avg/Month:         ${total_net / len(test_months):+,.2f}")
+
+    # Drawdown
+    equity_curve = [ACCOUNT_BALANCE]
+    peak = ACCOUNT_BALANCE
+    max_drawdown = 0
+    max_drawdown_pct = 0
+
+    for t in all_trades:
+        equity_curve.append(equity_curve[-1] + t.net_pnl)
+        if equity_curve[-1] > peak:
+            peak = equity_curve[-1]
+        dd = peak - equity_curve[-1]
+        dd_pct = (dd / peak * 100) if peak > 0 else 0
+        if dd > max_drawdown:
+            max_drawdown = dd
+            max_drawdown_pct = dd_pct
+
+    final_equity = equity_curve[-1]
+    total_return_pct = (final_equity - ACCOUNT_BALANCE) / ACCOUNT_BALANCE * 100
+
+    out("\n  2. DRAWDOWN ANALYSIS")
+    out("  " + "-" * 50)
+    out(f"  Starting Balance:  ${ACCOUNT_BALANCE:,.2f}")
+    out(f"  Final Equity:      ${final_equity:,.2f}")
+    out(f"  Total Return:      {total_return_pct:+.2f}%")
+    out(f"  Max Drawdown:      ${max_drawdown:,.2f} ({max_drawdown_pct:.1f}%)")
+    if max_drawdown > 0:
+        out(f"  Recovery Factor:   {total_net / max_drawdown:.2f}")
+
+    # Streaks
+    max_win_streak = 0
+    max_loss_streak = 0
+    current_streak = 0
+    for t in all_trades:
+        if t.net_pnl > 0:
+            current_streak = current_streak + 1 if current_streak > 0 else 1
+            max_win_streak = max(max_win_streak, current_streak)
+        else:
+            current_streak = current_streak - 1 if current_streak < 0 else -1
+            max_loss_streak = max(max_loss_streak, abs(current_streak))
+
+    out("\n  3. STREAK ANALYSIS")
+    out("  " + "-" * 50)
+    out(f"  Max Win Streak:    {max_win_streak} trades")
+    out(f"  Max Loss Streak:   {max_loss_streak} trades")
+
+    # Per-Strategy
+    strat_stats = {}
+    for t in all_trades:
+        s = t.strategy
+        if s not in strat_stats:
+            strat_stats[s] = {"trades": 0, "wins": 0, "net": 0, "gross": 0}
+        strat_stats[s]["trades"] += 1
+        strat_stats[s]["net"] += t.net_pnl
+        strat_stats[s]["gross"] += t.gross_pnl
+        if t.net_pnl > 0:
+            strat_stats[s]["wins"] += 1
+
+    out("\n  4. STRATEGY PERFORMANCE")
+    out("  " + "-" * 70)
+    out(f"  {'Strategy':<12} | {'Trades':>6} | {'WR':>6} | {'Gross':>10} | {'Net':>10} | {'Avg Net':>8}")
+    out("  " + "-" * 70)
+    for strat, stats in sorted(strat_stats.items()):
+        swr = stats["wins"] / stats["trades"] * 100 if stats["trades"] else 0
+        avg = stats["net"] / stats["trades"] if stats["trades"] else 0
+        out(f"  {strat:<12} | {stats['trades']:>6} | {swr:>5.1f}% | ${stats['gross']:>+9.2f} | ${stats['net']:>+9.2f} | ${avg:>+7.2f}")
+
+    # Per-Symbol
+    sym_stats = {}
+    for t in all_trades:
+        s = t.symbol
+        if s not in sym_stats:
+            sym_stats[s] = {"trades": 0, "wins": 0, "net": 0}
+        sym_stats[s]["trades"] += 1
+        sym_stats[s]["net"] += t.net_pnl
+        if t.net_pnl > 0:
+            sym_stats[s]["wins"] += 1
+
+    sorted_symbols = sorted(sym_stats.items(), key=lambda x: x[1]["net"], reverse=True)
+
+    out("\n  5. SYMBOL PERFORMANCE")
+    out("  " + "-" * 55)
+    out(f"  {'Symbol':<12} | {'Trades':>6} | {'WR':>6} | {'Net P/L':>10} | {'Status'}")
+    out("  " + "-" * 55)
+    for sym, stats in sorted_symbols:
+        swr = stats["wins"] / stats["trades"] * 100 if stats["trades"] else 0
+        status = "PROFIT" if stats["net"] > 0 else "LOSS"
+        out(f"  {sym:<12} | {stats['trades']:>6} | {swr:>5.1f}% | ${stats['net']:>+9.2f} | {status}")
+
+    # Checkpoint TP
+    cp_counts = {"TP1": 0, "TP2": 0, "TP3": 0}
+    for t in all_trades:
+        for cp in t.partial_exits:
+            if cp in cp_counts:
+                cp_counts[cp] += 1
+
+    if any(v > 0 for v in cp_counts.values()):
+        out("\n  6. CHECKPOINT TP EFFECTIVENESS")
+        out("  " + "-" * 50)
+        for cp, count in cp_counts.items():
+            pct = count / total_trades * 100 if total_trades else 0
+            out(f"  {cp} Hit:          {count} times ({pct:.1f}% of trades)")
+
+    # Daily Analysis
+    daily_pnl = {}
+    for t in all_trades:
+        day = str(t.time)[:10]
+        daily_pnl[day] = daily_pnl.get(day, 0) + t.net_pnl
+
+    if daily_pnl:
+        daily_values = list(daily_pnl.values())
+        green_days = len([d for d in daily_values if d > 0])
+        red_days = len([d for d in daily_values if d <= 0])
+        best_day_val = max(daily_values)
+        worst_day_val = min(daily_values)
+        avg_daily = sum(daily_values) / len(daily_values)
+
+        out("\n  7. DAILY ANALYSIS")
+        out("  " + "-" * 50)
+        out(f"  Trading Days:      {len(daily_values)}")
+        out(f"  Green Days:        {green_days} ({green_days/len(daily_values)*100:.0f}%)")
+        out(f"  Red Days:          {red_days} ({red_days/len(daily_values)*100:.0f}%)")
+        out(f"  Best Day:          ${best_day_val:+,.2f}")
+        out(f"  Worst Day:         ${worst_day_val:+,.2f}")
+        out(f"  Avg Daily P/L:     ${avg_daily:+,.2f}")
+
+        if total_net > 0:
+            consistency = best_day_val / total_net * 100
+            out(f"  Consistency:       {consistency:.1f}% {'(PASS <= 30%)' if consistency <= 30 else '(FAIL > 30%)'}")
+
+    # Equity Curve (sampled)
+    out("\n  8. EQUITY CURVE")
+    out("  " + "-" * 60)
+    step = max(1, len(equity_curve) // 10)
+    for i in range(0, len(equity_curve), step):
+        val = equity_curve[i]
+        diff = val - ACCOUNT_BALANCE
+        bar_len = int(diff / max(abs(total_net), 1) * 20)
+        if bar_len >= 0:
+            bar = "#" * min(bar_len, 30)
+        else:
+            bar = "-" * min(abs(bar_len), 30)
+        label = f"Trade {i}" if i > 0 else "Start"
+        out(f"  {label:<12} ${val:>10,.2f}  {bar}")
+    out(f"  {'End':<12} ${equity_curve[-1]:>10,.2f}")
+
+    # Verdict
+    out("\n  " + "=" * 50)
+    out("  VERDICT")
+    out("  " + "=" * 50)
+
+    issues = []
+    if win_rate < 40:
+        issues.append(f"Low win rate ({win_rate:.0f}%) - entries may need better timing")
+    if profit_factor < 1.0:
+        issues.append(f"Profit factor < 1 ({profit_factor:.2f}) - losing system")
+    elif profit_factor < 1.5:
+        issues.append(f"Profit factor weak ({profit_factor:.2f}) - target > 1.5")
+    if max_drawdown_pct > 10:
+        issues.append(f"High drawdown ({max_drawdown_pct:.1f}%) - risk management review needed")
+    if expectancy < 0:
+        issues.append(f"Negative expectancy (${expectancy:+.2f}/trade) - NOT viable")
+    if total_trades < 10:
+        issues.append(f"Too few trades ({total_trades}) - insufficient data")
+
+    strengths = []
+    if win_rate >= 55:
+        strengths.append(f"Good win rate ({win_rate:.0f}%)")
+    if profit_factor >= 2.0:
+        strengths.append(f"Strong profit factor ({profit_factor:.2f})")
+    if max_drawdown_pct < 5:
+        strengths.append(f"Low drawdown ({max_drawdown_pct:.1f}%)")
+    if expectancy > 5:
+        strengths.append(f"Solid expectancy (${expectancy:+.2f}/trade)")
+    if total_return_pct >= 6:
+        strengths.append(f"Target return achieved ({total_return_pct:+.1f}%)")
+
+    if strengths:
+        out("  [+] Strengths:")
+        for s in strengths:
+            out(f"      + {s}")
+    if issues:
+        out("  [!] Issues:")
+        for issue in issues:
+            out(f"      ! {issue}")
+
+    if not issues and profit_factor > 1.5 and expectancy > 0:
+        out("\n  >> SYSTEM VIABLE FOR LIVE TRADING <<")
+    elif expectancy > 0 and profit_factor > 1.0:
+        out("\n  >> SYSTEM MARGINAL - Optimize before live trading <<")
+    else:
+        out("\n  >> SYSTEM NOT READY - Significant improvements needed <<")
+
+    out("\n" + "=" * 100)
+    _save_report(lines, report_path)
+
+
+def _save_report(lines, report_path):
+    """Save report to file."""
+    _os.makedirs(_os.path.dirname(report_path), exist_ok=True)
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    print(f"\n  Report saved to: {report_path}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN RUNNER
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_backtest():
@@ -752,33 +1046,41 @@ def run_backtest():
         return
 
     DAYS_BACK = 90
-    print(f"FOREX LIQUIDITY HUNTER V18 — REALISTIC BACKTEST")
-    print(f"Loading {DAYS_BACK} days of history...")
-    print(f"Settings: RR>={config.MIN_RISK_REWARD_RATIO}, "
-          f"Risk={config.MAX_RISK_PER_TRADE_PCT}%, "
-          f"Confirmations>={config.MIN_CONFIRMATIONS}, "
-          f"Checkpoint TP={'ON' if getattr(config, 'ENABLE_CHECKPOINT_TP', False) else 'OFF'}")
     print()
+    print("=" * 70)
+    print("  FOREX LIQUIDITY HUNTER V18 - REALISTIC BACKTEST ENGINE")
+    print("=" * 70)
+    print(f"  Period:          Last {DAYS_BACK} days")
+    print(f"  Risk/Trade:      {config.MAX_RISK_PER_TRADE_PCT}%")
+    print(f"  Min RR:          1:{config.MIN_RISK_REWARD_RATIO}")
+    print(f"  Confirmations:   >= {config.MIN_CONFIRMATIONS}")
+    print(f"  Checkpoint TP:   {'ON' if getattr(config, 'ENABLE_CHECKPOINT_TP', False) else 'OFF'}")
+    print(f"  Max Open Trades: {config.MAX_OPEN_TRADES}")
+    print(f"  Symbols:         {len(config.SYMBOLS)}")
+    print("=" * 70)
+
+    # Phase 1: Load Data
+    print("\n  PHASE 1: Loading Historical Data")
+    print("  " + "-" * 40)
 
     symbol_data_cache = {}
     total_min_date = datetime.now()
+    load_start = _time.time()
 
-    for symbol in config.SYMBOLS:
-        print(f"  Loading {symbol}...", end="\r")
+    for idx, symbol in enumerate(config.SYMBOLS):
+        _progress_bar(idx, len(config.SYMBOLS), prefix="Data    ", start_time=load_start)
         df_m5, df_h1, df_m15 = get_symbol_data(symbol, days_back=DAYS_BACK)
         if df_m5 is not None and not df_m5.empty:
-            print(f"  OK {symbol}: {len(df_m5)} candles         ")
             symbol_data_cache[symbol] = (df_m5, df_h1, df_m15)
             total_min_date = min(total_min_date, df_m5.index.min())
-        else:
-            print(f"  -- {symbol}: No history               ")
+
+    _progress_bar(len(config.SYMBOLS), len(config.SYMBOLS), prefix="Data    ", start_time=load_start)
+    print(f"  Loaded {len(symbol_data_cache)}/{len(config.SYMBOLS)} symbols")
 
     if not symbol_data_cache:
-        print("No historical data available.")
+        print("  ERROR: No historical data available.")
         mt5.shutdown()
         return
-
-    print(f"\nData from: {total_min_date.strftime('%Y-%m-%d')}")
 
     # Generate months
     test_months = []
@@ -794,75 +1096,66 @@ def run_backtest():
             next_y += 1
         curr = curr.replace(year=next_y, month=next_m)
 
-    # Header
-    print()
-    print(f"{'MONTH':<12} | {'TRADES':>6} | {'WR':>6} | {'GROSS':>10} | {'NET':>10} | {'BEST DAY':>8} | {'CONSIST':>7} | {'STRATS'}")
-    print("-" * 100)
+    # Phase 2: Run Backtest
+    print(f"\n  PHASE 2: Running Backtest ({len(test_months)} months)")
+    print("  " + "-" * 40)
 
-    all_time_gross = 0
-    all_time_net = 0
-    total_trades = 0
-    total_wins = 0
-    strategy_counts = {"SMC": 0, "BREAKOUT": 0, "RSI": 0}
+    all_trades_combined = []
+    monthly_results = []
+    bt_start = _time.time()
 
-    for m_start, m_end in test_months:
+    for month_idx, (m_start, m_end) in enumerate(test_months):
+        _progress_bar(month_idx, len(test_months), prefix="Backtest", start_time=bt_start)
+
         trades = run_monthly_backtest(symbol_data_cache, m_start, m_end)
+        all_trades_combined.extend(trades)
 
-        gross_pnl = sum(t.gross_pnl for t in trades)
-        net_pnl = sum(t.net_pnl for t in trades)
+        gross = sum(t.gross_pnl for t in trades)
+        net = sum(t.net_pnl for t in trades)
         wins = len([t for t in trades if t.net_pnl > 0])
         wr = (wins / len(trades) * 100) if trades else 0
 
-        # Daily breakdown
-        daily_profits = {}
+        strat_breakdown = {}
         for t in trades:
-            day = str(t.time)[:10]
-            daily_profits[day] = daily_profits.get(day, 0) + t.net_pnl
-        max_win_day = max(daily_profits.values()) if daily_profits else 0
-        consistency_pct = (max_win_day / net_pnl * 100) if net_pnl > 0 else 0
+            strat_breakdown[t.strategy] = strat_breakdown.get(t.strategy, 0) + 1
 
-        # Strategy breakdown
-        month_strats = {}
-        for t in trades:
-            month_strats[t.strategy] = month_strats.get(t.strategy, 0) + 1
-            strategy_counts[t.strategy] = strategy_counts.get(t.strategy, 0) + 1
+        monthly_results.append({
+            "month": m_start.strftime("%b %Y"),
+            "trades": len(trades),
+            "wins": wins,
+            "wr": wr,
+            "gross": gross,
+            "net": net,
+            "strats": strat_breakdown,
+        })
 
-        strat_str = " ".join(f"{k}:{v}" for k, v in sorted(month_strats.items()))
-        status = "OK" if consistency_pct <= 30.0 and net_pnl >= 0 else ("!!" if net_pnl > 0 else "--")
-
-        month_name = m_start.strftime("%b %Y")
-        print(
-            f"{month_name:<12} | {len(trades):>6} | {wr:>5.1f}% | "
-            f"${gross_pnl:>+9.2f} | ${net_pnl:>+9.2f} | {consistency_pct:>7.1f}% | "
-            f"{status:>7} | {strat_str}"
-        )
-
-        all_time_gross += gross_pnl
-        all_time_net += net_pnl
-        total_trades += len(trades)
-        total_wins += wins
+    _progress_bar(len(test_months), len(test_months), prefix="Backtest", start_time=bt_start)
+    elapsed = _time.time() - bt_start
+    print(f"  Completed in {elapsed:.1f}s ({len(all_trades_combined)} trades)")
 
     mt5.shutdown()
 
-    # Summary
-    print("-" * 100)
-    overall_wr = (total_wins / total_trades * 100) if total_trades else 0
-    avg_per_month = total_trades / len(test_months) if test_months else 0
-    print(
-        f"{'TOTAL':<12} | {total_trades:>6} | {overall_wr:>5.1f}% | "
-        f"${all_time_gross:>+9.2f} | ${all_time_net:>+9.2f}"
-    )
-    print()
-    print(f"  Gross Profit: ${all_time_gross:+,.2f}")
-    print(f"  Net Profit:   ${all_time_net:+,.2f}  (after commission + spread)")
-    print(f"  Total Trades: {total_trades}  (avg {avg_per_month:.1f}/month)")
-    print(f"  Win Rate:     {overall_wr:.1f}%")
-    print(f"  Strategies:   {', '.join(f'{k}: {v}' for k, v in sorted(strategy_counts.items()) if v > 0)}")
-    print(f"  Settings:     RR>={config.MIN_RISK_REWARD_RATIO}, "
-          f"Risk={config.MAX_RISK_PER_TRADE_PCT}%, "
-          f"Checkpoints={'ON' if getattr(config, 'ENABLE_CHECKPOINT_TP', False) else 'OFF'}")
-    print("=" * 100)
+    # Phase 3: Monthly Table
+    print(f"\n  PHASE 3: Monthly Breakdown")
+    print("  " + "-" * 85)
+    print(f"  {'Month':<10} | {'Trades':>6} | {'WR':>6} | {'Gross':>10} | {'Net':>10} | {'Strategies'}")
+    print("  " + "-" * 85)
+
+    for mr in monthly_results:
+        strat_str = " ".join(f"{k}:{v}" for k, v in sorted(mr["strats"].items()))
+        print(
+            f"  {mr['month']:<10} | {mr['trades']:>6} | {mr['wr']:>5.1f}% | "
+            f"${mr['gross']:>+9.2f} | ${mr['net']:>+9.2f} | {strat_str}"
+        )
+
+    print("  " + "-" * 85)
+
+    # Phase 4: Advanced Report
+    print(f"\n  PHASE 4: Generating Evaluation Report\n")
+    report_path = _os.path.join(config.LOG_DIR, "backtest_report.txt")
+    generate_advanced_report(all_trades_combined, test_months, report_path)
 
 
 if __name__ == "__main__":
     run_backtest()
+
