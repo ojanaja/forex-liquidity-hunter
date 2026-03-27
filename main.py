@@ -91,8 +91,8 @@ def main():
     logger.info(
         r"""
   ╔═══════════════════════════════════════════════════╗
-  ║   FOREX LIQUIDITY HUNTER v1.0                     ║
-  ║   Strategy: Session Liquidity Sweep               ║
+  ║   FOREX LIQUIDITY HUNTER v1.5 (Sniper-X)          ║
+  ║   Strategy: Session Liquidity Sweep Aggressor     ║
   ║   Account:  WeMasterTrade 10k                     ║
   ║   Mode:     {'DRY RUN 🧪' if config.DRY_RUN else 'LIVE 🔴'}                              ║
   ╚═══════════════════════════════════════════════════╝
