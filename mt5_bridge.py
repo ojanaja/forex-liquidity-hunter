@@ -82,8 +82,15 @@ def connect() -> bool:
         logger.info("[MOCK] MT5 connect — simulated OK")
         return True
 
+    # Ensure login is an int (MT5 requirement)
+    try:
+        login_int = int(config.MT5_LOGIN) if config.MT5_LOGIN else 0
+    except ValueError:
+        logger.error(f"Invalid MT5_LOGIN in .env: {config.MT5_LOGIN}")
+        return False
+
     kwargs = {
-        "login": config.MT5_LOGIN,
+        "login": login_int,
         "password": config.MT5_PASSWORD,
         "server": config.MT5_SERVER,
     }
