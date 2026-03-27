@@ -19,18 +19,18 @@ MT5_PATH = os.getenv("MT5_PATH", None)  # Optional: path to terminal64.exe
 # ACCOUNT RULES (WeMasterTrade 10k Prop Firm)
 # ─── Risk Management ──────────────────────────────────────────────────────────
 ACCOUNT_BALANCE         = 10000.0  # Default evaluation balance
-MAX_RISK_PER_TRADE_PCT  = 0.25     # Reduced for aggressive multi-trade splitting
+MAX_RISK_PER_TRADE_PCT  = 0.5      # 0.5% risk per trade ($50)
 DAILY_LOSS_LIMIT        = 150.0    # Stop trading if down $150 in a day
 TOTAL_LOSS_LIMIT        = 350.0    # Stop trading if down $350 total
 PROFIT_TARGET           = 600.0    # Reaching 6% month is a high-tier professional result
 DAILY_PROFIT_CAP        = 200.0    # Tight 30% consistency rule enforcement
-MAX_OPEN_TRADES         = 2        # Allow 2 simultaneous trades for better coverage
+MAX_OPEN_TRADES         = 1        # Keep focus on best quality setup
 
 # ─── Strategy Parameters (Global Stable V11) ──────────────────────────────────
 SCAN_TIMEFRAME_MINUTES  = 5        # Entry checking interval
 RANGE_TIMEFRAME_MINUTES = 15       # Session range identification
-SWEEP_THRESHOLD_PIPS    = 0.2      # More aggressive: 0.2 pip sweep detection
-FVG_MIN_SIZE_PIPS       = 0.1      # Catching smaller displacements
+SWEEP_THRESHOLD_PIPS    = 1.0      # Proven 1.0 pip sweep for high accuracy
+FVG_MIN_SIZE_PIPS       = 0.2      # 0.2 pips minimum gap
 SL_BUFFER_PIPS          = 2.0      # 2.0 pips extra SL room
 TP_RATIO                = 1.5      # Stable 1.5:1 Reward to Risk
 AUTO_BREAK_EVEN         = True     # Protected trades
@@ -89,7 +89,7 @@ DRY_RUN = False
 MAX_SPREAD_PIPS = 80.0
 
 # Cooldown to prevent rapid consecutive trades on the same symbol (in minutes)
-TRADE_COOLDOWN_MINUTES = 5
+TRADE_COOLDOWN_MINUTES = 15
 
 # How often to check for signals (seconds)
 SCAN_INTERVAL_SECONDS = 15
