@@ -91,7 +91,13 @@ def main():
 
             # --- 2. Check risk limits ---
             if not risk.can_trade():
-                logger.warning("Daily risk limit reached. Standing down.")
+                logger.warning("Daily risk limit reached or bot stopped. Standing down.")
+                time.sleep(60)
+                continue
+
+            if risk.daily_trade_count >= getattr(config, "DAILY_TRADE_LIMIT", 3):
+                if time.time() - last_summary_time >= config.SUMMARY_LOG_INTERVAL_SECONDS:
+                    logger.info(f"Daily trade limit ({config.DAILY_TRADE_LIMIT}) reached. No more trades today.")
                 time.sleep(60)
                 continue
 

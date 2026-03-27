@@ -16,9 +16,10 @@ DAILY_LOSS_LIMIT = 150.0      # Safety Stop $150
 TOTAL_LOSS_LIMIT = 350.0      # Hard Stop $350
 DAILY_PROFIT_CAP = 120.0      # Consistency rule log
 
-MAX_RISK_PER_TRADE_PCT = 0.25  # Aggressive 0.25%
-MAX_OPEN_TRADES = 2
-TRADE_COOLDOWN_MINUTES = 30    # Avoid overtrading one pair
+MAX_RISK_PER_TRADE_PCT = 0.50  # Double risk (0.5%) for high-prob setups
+MAX_OPEN_TRADES = 1            # Focus on 1 high-prob trade at a time
+TRADE_COOLDOWN_MINUTES = 120   # 2-hour wait between trades for same signal
+DAILY_TRADE_LIMIT = 3          # Hard cap of 1-3 trades per day
 
 # =============================================================================
 # STRATEGY PARAMETERS
@@ -34,12 +35,12 @@ ENABLE_RSI_SCALP = True
 
 # V18 INTELLIGENCE
 ADX_PERIOD = 14
-ADX_TRENDING_THRESHOLD = 25   # Trending if ADX > 25
+ADX_TRENDING_THRESHOLD = 30   # Stricter trend filter (was 25)
 HTF_TIMEFRAME_MINUTES = 60    # H1 context for EMA bias
 HTF_EMA_PERIOD = 50           # Bias filter
 
 # SMC Logic
-SWEEP_THRESHOLD_PIPS = 1.0     # Tight liquidity sweep
+SWEEP_THRESHOLD_PIPS = 2.0     # More significant sweep (was 1.0)
 FVG_MIN_SIZE_PIPS = 1.0        # Smallest gap to consider
 TP_RATIO = 2.0                 # Target 1:2 RR
 
