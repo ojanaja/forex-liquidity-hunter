@@ -35,6 +35,8 @@ ENABLE_RSI_SCALP = True
 # V18 INTELLIGENCE
 ADX_PERIOD = 14
 ADX_TRENDING_THRESHOLD = 25   # Trending if ADX > 25
+HTF_TIMEFRAME_MINUTES = 60    # H1 context for EMA bias
+HTF_EMA_PERIOD = 50           # Bias filter
 
 # SMC Logic
 SWEEP_THRESHOLD_PIPS = 1.0     # Tight liquidity sweep
@@ -63,6 +65,7 @@ BE_BUFFER_PIPS = 1.0          # Move SL to Entry + 1.0 pip (cover commission)
 MT5_LOGIN = os.getenv("MT5_LOGIN", "")
 MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")
 MT5_SERVER = "WeMasterTrade-Virtual"
+MT5_PATH = ""                  # Optional path to terminal64.exe
 
 DRY_RUN = False               # LIVE TRADING ENABLED
 MAX_SPREAD_PIPS = 3.0         # Spread filter (WeMasterTrade spreads vary)
