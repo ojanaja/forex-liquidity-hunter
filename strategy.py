@@ -1,15 +1,13 @@
 """
-Forex Liquidity Hunter - Strategy Module (V17 Multi-Engine)
-Implements 3 parallel strategies:
-  1. SMC Liquidity Sweep (High Precision)
-  2. Session Breakout (Aggressive Momentum)
-  3. RSI Scalper (Mean Reversion)
+Forex Liquidity Hunter - Strategy Module (V18 Multi-Engine + Intelligence)
+Implements 3 parallel strategies with Market Regime Awareness.
 """
 import logging
 from dataclasses import dataclass
 from typing import Optional
 
 import pandas as pd
+import numpy as np
 
 import config
 import mt5_bridge
@@ -25,7 +23,7 @@ class Signal:
     entry_price: float
     stop_loss: float
     take_profit: float
-    sl_pips: float       # SL distance in pips (needed for lot sizing)
+    sl_pips: float
     reason: str
 
 
@@ -33,147 +31,134 @@ class Signal:
 # Step 1: Identify the Session Range
 # ======================================================================
 
-def identify_session_range(
-    symbol: str,
-    range_hours: int = 8,
-) -> Optional[dict]:
-    """Get the High / Low of the preceding session range."""
+def identify_session_range(symbol: str, range_hours: int = 8) -> Optional[dict]:
     candles_needed = (range_hours * 60) // config.RANGE_TIMEFRAME_MINUTES
-    df = mt5_bridge.get_ohlc(
-        symbol,
-        timeframe_minutes=config.RANGE_TIMEFRAME_MINUTES,
-        count=candles_needed + 5,
-    )
-
-    if df is None or df.empty:
-        return None
-
+    df = mt5_bridge.get_ohlc(symbol, timeframe_minutes=config.RANGE_TIMEFRAME_MINUTES, count=candles_needed + 5)
+    if df is None or df.empty: return None
     range_df = df.iloc[-(candles_needed + 1):-1]
-    if range_df.empty:
-        return None
-
-    high = range_df["high"].max()
-    low = range_df["low"].min()
-    mid = (high + low) / 2.0
-
-    return {"high": high, "low": low, "mid": mid}
+    if range_df.empty: return None
+    high, low = range_df["high"].max(), range_df["low"].min()
+    return {"high": high, "low": low, "mid": (high + low) / 2.0}
 
 
 # ======================================================================
 # Step 2: Detect the Sweep (Liquidity Grab)
 # ======================================================================
 
-def detect_sweep(
-    symbol: str,
-    session_high: float,
-    session_low: float,
-) -> Optional[dict]:
-    """Check if price pushed beyond the session range."""
+def detect_sweep(symbol: str, session_high: float, session_low: float) -> Optional[dict]:
     sym_info = mt5_bridge.get_symbol_info(symbol)
     if sym_info is None: return None
-
     pip_size = sym_info.point * 10 if sym_info.digits in (3, 5) else sym_info.point
     threshold = config.SWEEP_THRESHOLD_PIPS * pip_size
-
     df = mt5_bridge.get_ohlc(symbol, timeframe_minutes=1, count=30)
     if df is None or df.empty: return None
-
-    recent_high = df["high"].max()
-    recent_low = df["low"].min()
-
-    if recent_high >= session_high + threshold:
-        return {"type": "HIGH_SWEPT", "extreme": recent_high}
-    if recent_low <= session_low - threshold:
-        return {"type": "LOW_SWEPT", "extreme": recent_low}
+    recent_high, recent_low = df["high"].max(), df["low"].min()
+    if recent_high >= session_high + threshold: return {"type": "HIGH_SWEPT", "extreme": recent_high}
+    if recent_low <= session_low - threshold: return {"type": "LOW_SWEPT", "extreme": recent_low}
     return None
 
 
 # ======================================================================
-# Step 3: FVG and Rejection Detection (SMC Confirmation)
+# Step 3: Confirmation (SMC FVG)
 # ======================================================================
 
 def detect_fvg_entry(symbol: str, sweep_data: dict) -> Optional[dict]:
-    """Look for an FVG forming after the sweep."""
     df = mt5_bridge.get_ohlc(symbol, timeframe_minutes=config.SCAN_TIMEFRAME_MINUTES, count=10)
     if df is None or len(df) < 5: return None
-    
     sym_info = mt5_bridge.get_symbol_info(symbol)
     pip_size = sym_info.point * 10 if sym_info.digits in (3, 5) else sym_info.point
     min_fvg_size = config.FVG_MIN_SIZE_PIPS * pip_size
-    
     current_price = mt5_bridge.get_current_price(symbol)
     if current_price is None: return None
 
     for i in range(len(df) - 3, 0, -1):
         c0, c1, c2 = df.iloc[i-1], df.iloc[i], df.iloc[i+1]
-        
         if sweep_data["type"] == "HIGH_SWEPT":
             gap = c0["low"] - c2["high"]
             if gap >= min_fvg_size:
                 fvg_top, fvg_bottom = c0["low"], c2["high"]
-                target_entry = (fvg_top + fvg_bottom) / 2.0 if getattr(config, "USE_FVG_50_ENTRY", False) else fvg_bottom
-                if target_entry <= current_price["ask"] <= fvg_top + (2 * pip_size):
-                    return {"wick_tip": sweep_data["extreme"], "fvg_entry": current_price["ask"]}
-                    
+                target = (fvg_top + fvg_bottom) / 2.0 if getattr(config, "USE_FVG_50_ENTRY", False) else fvg_bottom
+                if target <= current_price["ask"] <= fvg_top + (2 * pip_size): return {"wick_tip": sweep_data["extreme"], "fvg_entry": current_price["ask"]}
         elif sweep_data["type"] == "LOW_SWEPT":
             gap = c2["low"] - c0["high"]
             if gap >= min_fvg_size:
                 fvg_top, fvg_bottom = c2["low"], c0["high"]
-                target_entry = (fvg_top + fvg_bottom) / 2.0 if getattr(config, "USE_FVG_50_ENTRY", False) else fvg_top
-                if fvg_bottom - (2 * pip_size) <= current_price["bid"] <= target_entry:
-                    return {"wick_tip": sweep_data["extreme"], "fvg_entry": current_price["bid"]}
+                target = (fvg_top + fvg_bottom) / 2.0 if getattr(config, "USE_FVG_50_ENTRY", False) else fvg_top
+                if fvg_bottom - (2 * pip_size) <= current_price["bid"] <= target: return {"wick_tip": sweep_data["extreme"], "fvg_entry": current_price["bid"]}
     return None
 
 
 # ======================================================================
-# Step 4: Breakout Strategy (Momentum)
+# Step 4: Breakout Strategy
 # ======================================================================
 
 def detect_breakout(symbol: str, session_high: float, session_low: float) -> Optional[dict]:
-    if not getattr(config, "ENABLE_BREAKOUT", False):
-        return None
+    if not getattr(config, "ENABLE_BREAKOUT", False): return None
     df = mt5_bridge.get_ohlc(symbol, timeframe_minutes=5, count=4)
     if df is None or len(df) < 4: return None
-    last_candle, prev_candle = df.iloc[-1], df.iloc[-2]
-    
-    if last_candle["close"] > session_high and prev_candle["close"] > session_high:
-        return {"type": "BREAKOUT_BUY", "entry": last_candle["close"], "sl": session_low, "tp": last_candle["close"] + (last_candle["close"] - session_low) * config.TP_RATIO}
-    if last_candle["close"] < session_low and prev_candle["close"] < session_low:
-        return {"type": "BREAKOUT_SELL", "entry": last_candle["close"], "sl": session_high, "tp": last_candle["close"] - (session_high - last_candle["close"]) * config.TP_RATIO}
+    last, prev = df.iloc[-1], df.iloc[-2]
+    if last["close"] > session_high and prev["close"] > session_high:
+        return {"type": "BREAKOUT_BUY", "entry": last["close"], "sl": session_low, "tp": last["close"] + (last["close"] - session_low) * config.TP_RATIO}
+    if last["close"] < session_low and prev["close"] < session_low:
+        return {"type": "BREAKOUT_SELL", "entry": last["close"], "sl": session_high, "tp": last["close"] - (session_high - last["close"]) * config.TP_RATIO}
     return None
 
 
 # ======================================================================
-# Step 5: RSI Scalping Strategy (Mean Reversion)
+# Step 5: RSI Scalper
 # ======================================================================
 
 def detect_rsi_scalp(symbol: str) -> Optional[dict]:
-    if not getattr(config, "ENABLE_RSI_SCALP", False):
-        return None
+    if not getattr(config, "ENABLE_RSI_SCALP", False): return None
     df = mt5_bridge.get_ohlc(symbol, timeframe_minutes=5, count=30)
     if df is None or len(df) < 20: return None
-    
     delta = df["close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=config.RSI_PERIOD).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=config.RSI_PERIOD).mean()
-    rs = gain / loss
+    rs = gain / loss.replace(0, 0.1)
     df["rsi"] = 100 - (100 / (1+rs))
-    
-    last_rsi, last_candle = df["rsi"].iloc[-1], df.iloc[-1]
+    last_rsi, last_c = df["rsi"].iloc[-1], df.iloc[-1]
     sym_info = mt5_bridge.get_symbol_info(symbol)
     pip_size = sym_info.point * 10 if sym_info.digits in (3, 5) else sym_info.point
-    
     if last_rsi < config.RSI_OS:
-        sl_price = last_candle["low"] - (config.SL_BUFFER_PIPS * pip_size)
-        return {"type": "RSI_OS_BUY", "entry": last_candle["close"], "sl": sl_price, "tp": last_candle["close"] + (last_candle["close"] - sl_price) * config.TP_RATIO}
+        sl = last_c["low"] - (config.SL_BUFFER_PIPS * pip_size)
+        return {"type": "RSI_OS_BUY", "entry": last_c["close"], "sl": sl, "tp": last_c["close"] + (last_c["close"] - sl) * config.TP_RATIO}
     if last_rsi > config.RSI_OB:
-        sl_price = last_candle["high"] + (config.SL_BUFFER_PIPS * pip_size)
-        return {"type": "RSI_OB_SELL", "entry": last_candle["close"], "sl": sl_price, "tp": last_candle["close"] - (sl_price - last_candle["close"]) * config.TP_RATIO}
+        sl = last_c["high"] + (config.SL_BUFFER_PIPS * pip_size)
+        return {"type": "RSI_OB_SELL", "entry": last_c["close"], "sl": sl, "tp": last_c["close"] - (sl - last_c["close"]) * config.TP_RATIO}
     return None
 
 
 # ======================================================================
-# Step 6: HTF Bias Filter
+# Step 6: Market Intelligence (Regime)
+# ======================================================================
+
+def detect_market_regime(symbol: str) -> str:
+    """Label market as TREND_UP, TREND_DOWN, or SIDEWAYS."""
+    df = mt5_bridge.get_ohlc(symbol, timeframe_minutes=15, count=100)
+    if df is None or len(df) < 50: return "SIDEWAYS"
+    up_m, down_m = df["high"].diff(), -df["low"].diff()
+    plus_dm = up_m.where((up_m > down_m) & (up_m > 0), 0.0)
+    minus_dm = down_m.where((down_m > up_m) & (down_m > 0), 0.0)
+    tr = pd.concat([df["high"]-df["low"], (df["high"]-df["close"].shift(1)).abs(), (df["low"]-df["close"].shift(1)).abs()], axis=1).max(axis=1)
+    atr = tr.rolling(window=config.ADX_PERIOD).mean().replace(0, 0.1)
+    plus_di = 100 * (plus_dm.rolling(window=config.ADX_PERIOD).mean() / atr)
+    minus_di = 100 * (minus_dm.rolling(window=config.ADX_PERIOD).mean() / atr)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 0.1)
+    adx = dx.rolling(window=config.ADX_PERIOD).mean().iloc[-1]
+    df_h1 = mt5_bridge.get_ohlc(symbol, timeframe_minutes=60, count=60)
+    if df_h1 is None or len(df_h1) < 50: return "SIDEWAYS"
+    e20 = df_h1["close"].ewm(span=20, adjust=False).mean().iloc[-1]
+    e50 = df_h1["close"].ewm(span=50, adjust=False).mean().iloc[-1]
+    regime = "SIDEWAYS"
+    if adx > config.ADX_TRENDING_THRESHOLD:
+        regime = "TREND_UP" if e20 > e50 else "TREND_DOWN"
+    logger.info(f"🔍 {symbol} Intelligence: {regime} (ADX: {adx:.1f})")
+    return regime
+
+
+# ======================================================================
+# Step 7: HTF Bias Filter
 # ======================================================================
 
 def check_htf_bias(symbol: str) -> Optional[str]:
@@ -181,62 +166,59 @@ def check_htf_bias(symbol: str) -> Optional[str]:
     df = mt5_bridge.get_ohlc(symbol, timeframe_minutes=config.HTF_TIMEFRAME_MINUTES, count=config.HTF_EMA_PERIOD + 5)
     if df is None or len(df) < config.HTF_EMA_PERIOD: return None
     df['ema'] = df['close'].ewm(span=config.HTF_EMA_PERIOD, adjust=False).mean()
-    price = mt5_bridge.get_current_price(symbol)
-    if price is None: return None
-    last_ema = df['ema'].iloc[-1]
-    if price['ask'] > last_ema: return "BULLISH"
-    elif price['bid'] < last_ema: return "BEARISH"
+    p = mt5_bridge.get_current_price(symbol)
+    if p is None: return None
+    if p['ask'] > df['ema'].iloc[-1]: return "BULLISH"
+    elif p['bid'] < df['ema'].iloc[-1]: return "BEARISH"
     return "NEUTRAL"
 
 
 # ======================================================================
-# Step 7: Main Signal Generator (Orchestrator)
+# Step 8: Main Signal Generator
 # ======================================================================
 
 def generate_signal(symbol: str) -> Optional[Signal]:
     sym_info = mt5_bridge.get_symbol_info(symbol)
     if sym_info is None: return None
     pip_size = sym_info.point * 10 if sym_info.digits in (3, 5) else sym_info.point
+    if (sym_info.spread * sym_info.point) / pip_size > config.MAX_SPREAD_PIPS: return None
     
-    # Spread Check
-    spread_pips = (sym_info.spread * sym_info.point) / pip_size
-    if spread_pips > config.MAX_SPREAD_PIPS: return None
-
-    # Bias and Range
+    regime = detect_market_regime(symbol)
     htf_bias = check_htf_bias(symbol)
     if htf_bias is None: return None
-    range_data = identify_session_range(symbol)
-    if range_data is None: return None
+    rg = identify_session_range(symbol)
+    if rg is None: return None
 
-    # --- STRATEGY A: SMC Sweep ---
+    # --- Strategy Filter ---
+    # SMC: Best in SIDEWAYS or matching TREND
     if getattr(config, "ENABLE_SMC_SWEEP", True):
-        sweep = detect_sweep(symbol, range_data["high"], range_data["low"])
-        if sweep:
-            if sweep["type"] == "HIGH_SWEPT" and htf_bias == "BULLISH": pass
-            elif sweep["type"] == "LOW_SWEPT" and htf_bias == "BEARISH": pass
+        sw = detect_sweep(symbol, rg["high"], rg["low"])
+        if sw:
+            dir = "BUY" if sw["type"] == "LOW_SWEPT" else "SELL"
+            if (regime == "TREND_UP" and dir == "SELL") or (regime == "TREND_DOWN" and dir == "BUY"): pass
             else:
-                entry_data = detect_fvg_entry(symbol, sweep)
-                if entry_data:
-                    sl_pips = abs(entry_data["fvg_entry"] - entry_data["wick_tip"]) / pip_size
-                    return Signal(symbol, "BUY" if sweep["type"] == "LOW_SWEPT" else "SELL", 
-                                  entry_data["fvg_entry"], entry_data["wick_tip"], 
-                                  entry_data["fvg_entry"] + (entry_data["fvg_entry"] - entry_data["wick_tip"]) * config.TP_RATIO, 
-                                  sl_pips, f"SMC: {sweep['type']} + FVG")
+                ent = detect_fvg_entry(symbol, sw)
+                if ent:
+                    sl_p = abs(ent["fvg_entry"] - ent["wick_tip"]) / pip_size
+                    return Signal(symbol, dir, ent["fvg_entry"], ent["wick_tip"], ent["fvg_entry"] + (ent["fvg_entry"] - ent["wick_tip"]) * config.TP_RATIO, sl_p, f"SMC ({regime})")
 
-    # --- STRATEGY B: Breakout ---
+    # Breakout: Only when trend matches or starting
     if getattr(config, "ENABLE_BREAKOUT", False):
-        brut = detect_breakout(symbol, range_data["high"], range_data["low"])
-        if brut:
-            sl_pips = abs(brut["entry"] - brut["sl"]) / pip_size
-            return Signal(symbol, "BUY" if "BUY" in brut["type"] else "SELL", 
-                          brut["entry"], brut["sl"], brut["tp"], sl_pips, f"Momentum: Session {brut['type']}")
+        br = detect_breakout(symbol, rg["high"], rg["low"])
+        if br:
+            dir = "BUY" if "BUY" in br["type"] else "SELL"
+            if regime != "SIDEWAYS" and regime not in br["type"]: pass
+            else:
+                sl_p = abs(br["entry"] - br["sl"]) / pip_size
+                return Signal(symbol, dir, br["entry"], br["sl"], br["tp"], sl_p, f"Breakout ({regime})")
 
-    # --- STRATEGY C: RSI Scalp ---
+    # RSI: Mean Reversion -> Only in SIDEWAYS
     if getattr(config, "ENABLE_RSI_SCALP", False):
-        rsi_s = detect_rsi_scalp(symbol)
-        if rsi_s:
-            sl_pips = abs(rsi_s["entry"] - rsi_s["sl"]) / pip_size
-            return Signal(symbol, "BUY" if "BUY" in rsi_s["type"] else "SELL", 
-                          rsi_s["entry"], rsi_s["sl"], rsi_s["tp"], sl_pips, f"Scalp: {rsi_s['type']}")
+        rs = detect_rsi_scalp(symbol)
+        if rs:
+            dir = "BUY" if "BUY" in rs["type"] else "SELL"
+            if regime == "SIDEWAYS":
+                sl_p = abs(rs["entry"] - rs["sl"]) / pip_size
+                return Signal(symbol, dir, rs["entry"], rs["sl"], rs["tp"], sl_p, f"Scalp ({regime})")
 
     return None

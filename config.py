@@ -34,9 +34,15 @@ SWEEP_THRESHOLD_PIPS    = 0.5      # More sensitive 0.5 pip sweep
 FVG_MIN_SIZE_PIPS       = 0.2      # 0.2 pips minimum gap
 SL_BUFFER_PIPS          = 2.0      # 2.0 pips extra SL room
 TP_RATIO                = 1.5      # Stable 1.5:1 Reward to Risk
-AUTO_BREAK_EVEN         = True     # Protected trades
-BE_ACTIVATION_RATIO     = 1.1      # 1.1R before moving to BE
-USE_FVG_50_ENTRY        = True     # 50% Consequent Encroachment entry strategy
+# ─── Risk & Management (V18 Intelligence) ──────────────────────────────────
+AUTO_BREAK_EVEN         = True      # Protected trades
+BE_ACTIVATION_RATIO     = 1.1       # 1.1R before moving to BE
+BE_BUFFER_PIPS          = 1.0       # Move SL to Entry + 1.0 pip to cover commission/spread
+USE_FVG_50_ENTRY        = True      # 50% Consequent Encroachment entry strategy
+
+# --- Market Regime (ADX) ---
+ADX_PERIOD              = 14
+ADX_TRENDING_THRESHOLD  = 25        # Above 25 = Strong Trend, Below 20 = Sideways
 
 
 
