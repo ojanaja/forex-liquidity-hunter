@@ -57,7 +57,7 @@ class RiskManager:
         self._check_new_day()
 
         if self.is_stopped_for_day:
-            logger.info(f"STOPPED for today: {self.stop_reason}")
+            logger.info(f"⛔ Stopped for today: {self.stop_reason}")
             return False
 
         # Rule 1: Daily Loss Limit
@@ -87,7 +87,7 @@ class RiskManager:
         # Rule 4: Daily Profit Cap (consistency) - LOG ONLY per user request
         if total_daily_pnl >= config.DAILY_PROFIT_CAP:
             logger.info(
-                f"Daily profit cap reached: +${total_daily_pnl:.2f}. "
+                f"🎯 Daily profit cap reached: +${total_daily_pnl:.2f}. "
                 f"Continuing trade per user preference."
             )
             # return False <-- Disabled to allow $600/month target achievement
@@ -156,12 +156,11 @@ class RiskManager:
     # Trade Recording
     # ===================================================================
 
-    def record_trade(self, profit: float, commission: float = 0.0, swap: float = 0.0, symbol: str = ""):
-        """Call this after every trade closes to record Net P/L."""
+    def record_trade(self, profit: float, symbol: str = ""):
+        """Call this after every trade closes."""
         self._check_new_day()
 
-        net_profit = profit + commission + swap
-        self.daily_realized_pnl += net_profit
+        self.daily_realized_pnl += profit
         self.daily_trade_count += 1
         self.total_trade_count += 1
 
@@ -170,31 +169,13 @@ class RiskManager:
         else:
             self.daily_losses += 1
 
+        emoji = "✅" if profit >= 0 else "❌"
         logger.info(
-            f"Trade CLOSED: {symbol} ${profit:+.2f} | "
+            f"{emoji} Trade closed: {symbol} ${profit:+.2f} | "
             f"Daily P/L: ${self.daily_realized_pnl:+.2f} | "
             f"Cumulative: ${(self.cumulative_pnl + self.daily_realized_pnl):+.2f}"
         )
 
-        self._save_state()
-
-    def sync_closed_trades(self, deals: list[dict]):
-        """
-        Synchronize realized P/L with actual MT5 history deals.
-        Ensures commission and swaps are perfectly accounted for.
-        """
-        if not deals: return
-
-        # Reset daily realized P/L based on actual deal history (Profit + Commission + Swap)
-        total_net_pnl = sum(
-            d.get("profit", 0.0) + d.get("commission", 0.0) + d.get("swap", 0.0)
-            for d in deals
-        )
-        
-        self.daily_realized_pnl = total_net_pnl
-        self.daily_trade_count = len(deals)
-        self.daily_wins = sum(1 for d in deals if d.get("profit", 0.0) >= 0)
-        self.daily_losses = sum(1 for d in deals if d.get("profit", 0.0) < 0)
         self._save_state()
 
     # ===================================================================
@@ -232,25 +213,25 @@ class RiskManager:
         s = self.get_daily_summary()
         logger.info(
             f"\n{'='*50}\n"
-            f"DAILY SUMMARY --- {s['date']}\n"
+            f"📊 DAILY SUMMARY — {s['date']}\n"
             f"{'='*50}\n"
             f"  Realized P/L:   ${s['daily_realized_pnl']:+.2f}\n"
             f"  Floating P/L:   ${s['daily_floating_pnl']:+.2f}\n"
             f"  Total Today:    ${s['daily_total_pnl']:+.2f}\n"
             f"  Cumulative:     ${s['cumulative_pnl']:+.2f}\n"
             f"  Trades: {s['trades_today']} "
-            f"(W: {s['wins']} / L: {s['losses']} --- "
+            f"(W: {s['wins']} / L: {s['losses']} — "
             f"{s['win_rate']}%)\n"
             f"  To Target:      ${s['distance_to_target']:+.2f}\n"
-            f"  Status:         {'STOPPED' if s['is_stopped'] else 'ACTIVE'}\n"
+            f"  Status:         {'🛑 STOPPED' if s['is_stopped'] else '🟢 ACTIVE'}\n"
             f"{'='*50}"
         )
 
         # Check if profit target reached
         if s["cumulative_pnl"] >= config.PROFIT_TARGET:
             logger.info(
-                f"PROFIT TARGET REACHED! "
-                f"${s['cumulative_pnl']:.2f} / ${config.PROFIT_TARGET:.2f}"
+                f"🎉🎉🎉 PROFIT TARGET REACHED! "
+                f"${s['cumulative_pnl']:.2f} / ${config.PROFIT_TARGET:.2f} 🎉🎉🎉"
             )
 
     # ===================================================================
@@ -278,15 +259,15 @@ class RiskManager:
     # ===================================================================
 
     def _get_floating_pnl(self) -> float:
-        """Sum of unrealized P/L including commission and swap."""
+        """Sum of unrealized P/L from all open positions."""
         positions = mt5_bridge.get_open_positions()
-        return sum(p.profit + p.commission + p.swap for p in positions)
+        return sum(p.profit for p in positions)
 
     def _stop_day(self, reason: str):
         """Mark the bot as stopped for the rest of the day."""
         self.is_stopped_for_day = True
         self.stop_reason = reason
-        logger.warning(f"BOT STOPPED: {reason}")
+        logger.warning(f"🛑 BOT STOPPED: {reason}")
 
     def _check_new_day(self):
         """Reset daily counters if a new trading day has started."""

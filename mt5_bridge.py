@@ -67,8 +67,6 @@ class Position:
     sl: float
     tp: float
     profit: float
-    commission: float
-    swap: float
     time: datetime
 
 
@@ -82,15 +80,8 @@ def connect() -> bool:
         logger.info("[MOCK] MT5 connect — simulated OK")
         return True
 
-    # Ensure login is an int (MT5 requirement)
-    try:
-        login_int = int(config.MT5_LOGIN) if config.MT5_LOGIN else 0
-    except ValueError:
-        logger.error(f"Invalid MT5_LOGIN in .env: {config.MT5_LOGIN}")
-        return False
-
     kwargs = {
-        "login": login_int,
+        "login": config.MT5_LOGIN,
         "password": config.MT5_PASSWORD,
         "server": config.MT5_SERVER,
     }
@@ -318,7 +309,7 @@ def modify_position_sl(ticket: int, new_sl: float) -> bool:
 
     result = mt5.order_send(request)
     if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-        logger.info(f"Auto Break-Even: Moved ticket {ticket} SL to {new_sl:.5f}")
+        logger.info(f"🛡️ Auto Break-Even: Moved ticket {ticket} SL to {new_sl:.5f}")
         return True
 
     err = result.comment if result else "Unknown error"
@@ -345,8 +336,6 @@ def get_open_positions() -> list[Position]:
             sl=p.sl,
             tp=p.tp,
             profit=p.profit,
-            commission=p.commission,
-            swap=p.swap,
             time=datetime.fromtimestamp(p.time),
         )
         for p in positions

@@ -1,6 +1,6 @@
 """
-Forex Liquidity Hunter - Configuration (V17 Strategy Hybrid)
-Core settings for Risk, Strategy, and Connectivity.
+Forex Liquidity Hunter - Configuration
+All tunable parameters for the trading bot.
 """
 import os
 from dotenv import load_dotenv
@@ -8,73 +8,43 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # =============================================================================
-# ACCOUNT & RISK SETTINGS
+# MT5 CREDENTIALS (loaded from .env)
 # =============================================================================
-ACCOUNT_BALANCE = 10000.0
-PROFIT_TARGET = 600.0         # Reward $600
-DAILY_LOSS_LIMIT = 150.0      # Safety Stop $150
-TOTAL_LOSS_LIMIT = 350.0      # Hard Stop $350
-DAILY_PROFIT_CAP = 120.0      # Consistency rule log
-
-MAX_RISK_PER_TRADE_PCT = 0.25  # Lowered risk for multiple concurrent trades
-MAX_OPEN_TRADES = 2            # Allowed 2 concurrent trades
-TRADE_COOLDOWN_MINUTES = 10    # Faster turnaround
-DAILY_TRADE_LIMIT = 5          # Higher daily trade count for V17 energy
-
-# =============================================================================
-# STRATEGY PARAMETERS (V17 RESTORED)
-# =============================================================================
-SCAN_TIMEFRAME_MINUTES = 1    # Rapid scanning on M1
-RANGE_TIMEFRAME_MINUTES = 15  # Session range context on M15
-USE_FVG_50_ENTRY = True       # 50% CE entry enabled for V17
-
-# V17 STRATEGIES
-ENABLE_SMC_SWEEP = True
-ENABLE_BREAKOUT = True
-ENABLE_RSI_SCALP = True
-
-# V18 INTELLIGENCE (Still active but less restrictive)
-ADX_PERIOD = 14
-ADX_TRENDING_THRESHOLD = 25   # Standard V17 threshold
-HTF_TIMEFRAME_MINUTES = 60    # H1 context for EMA bias
-HTF_EMA_PERIOD = 20           # Fast V17 HTF Bias (was 50)
-USE_HTF_FILTER = True
-
-# SMC Logic (V17 Aggressive)
-SWEEP_THRESHOLD_PIPS = 0.5     # Ultra-sensitive sweep
-FVG_MIN_SIZE_PIPS = 0.5        # Sensitive gap
-TP_RATIO = 1.5                 # V17 Standard RR
-
-# RSI Logic
-RSI_PERIOD = 14
-RSI_OB = 70
-RSI_OS = 30
-SL_BUFFER_PIPS = 2.0           # Extra room for RSI scalps
-
-# Breakout Logic (London/NY)
-BREAKOUT_BUFFER_PIPS = 1.5
-
-# =============================================================================
-# BREAK-EVEN PLUS (V18)
-# =============================================================================
-AUTO_BREAK_EVEN = True
-BE_ACTIVATION_RATIO = 1.1     # Move to BE at 1.1R profit
-BE_BUFFER_PIPS = 1.0          # Move SL to Entry + 1.0 pip
-
-# =============================================================================
-# CONNECTIVITY (VPS SAFE)
-# =============================================================================
-MT5_LOGIN = os.getenv("MT5_LOGIN", "")
+MT5_LOGIN = int(os.getenv("MT5_LOGIN", "0"))
 MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")
-MT5_SERVER = "WeMasterTrade-Virtual"
-MT5_PATH = ""                  # Optional path to terminal64.exe
-
-DRY_RUN = False               # LIVE TRADING ENABLED
-MAX_SPREAD_PIPS = 80.0        # Gold compatible spread (V17 Setting)
+MT5_SERVER = os.getenv("MT5_SERVER", "")
+MT5_PATH = os.getenv("MT5_PATH", None)  # Optional: path to terminal64.exe
 
 # =============================================================================
-# SESSIONS (WIB - Western Indonesia Time)
+# ACCOUNT RULES (WeMasterTrade 10k Prop Firm)
+# ─── Risk Management ──────────────────────────────────────────────────────────
+ACCOUNT_BALANCE         = 10000.0  # Default evaluation balance
+MAX_RISK_PER_TRADE_PCT  = 0.25     # Lowered to 0.25% for V15 Sniper-X (Allow 2 trades)
+DAILY_LOSS_LIMIT        = 150.0    # Stop trading if down $150 in a day
+TOTAL_LOSS_LIMIT        = 350.0    # Stop trading if down $350 total
+PROFIT_TARGET           = 600.0    # Reaching 6% month is a high-tier professional result
+DAILY_PROFIT_CAP        = 200.0    # Tight 30% consistency rule enforcement
+# Max open trades (Increased to 2 for Sniper-X)
+MAX_OPEN_TRADES = 2
+
+# ─── Strategy Parameters (V15 Sniper-X Aggressive) ───────────────────────────
+SCAN_TIMEFRAME_MINUTES  = 1        # Fast M1 scanning
+RANGE_TIMEFRAME_MINUTES = 15       # Session range identification
+SWEEP_THRESHOLD_PIPS    = 0.5      # More sensitive 0.5 pip sweep
+FVG_MIN_SIZE_PIPS       = 0.2      # 0.2 pips minimum gap
+SL_BUFFER_PIPS          = 2.0      # 2.0 pips extra SL room
+TP_RATIO                = 1.5      # Stable 1.5:1 Reward to Risk
+AUTO_BREAK_EVEN         = True     # Protected trades
+BE_ACTIVATION_RATIO     = 1.1      # 1.1R before moving to BE
+USE_FVG_50_ENTRY        = True     # 50% Consequent Encroachment entry strategy
+
+
+
+
 # =============================================================================
+# SESSION WINDOWS (UTC+7 / WIB)
+# =============================================================================
+# Format: (name, start_hour, start_minute, end_hour, end_minute)
 SESSIONS = [
     ("Tokyo",   7,  0,   9,  0),   # 07:00 - 09:00 WIB
     ("London", 15,  0,  17,  0),   # 15:00 - 17:00 WIB
@@ -84,7 +54,7 @@ SESSIONS = [
 TIMEZONE = "Asia/Jakarta"  # UTC+7
 
 # =============================================================================
-# TRADING PAIRS (Multi-Asset 14 Pairs Restored)
+# TRADING PAIRS (Multi-Asset Global Selection)
 # =============================================================================
 SYMBOLS = [
     "EURUSDx", "GBPUSDx", "USDJPYx", "EURJPYx", "GBPJPYx", "XAUUSDx",
@@ -93,9 +63,55 @@ SYMBOLS = [
 ]
 
 # =============================================================================
-# LOGGING & HOUSEKEEPING
+# STRATEGY MODULES (V17 Multi-Engine)
 # =============================================================================
+ENABLE_SMC_SWEEP = True
+ENABLE_BREAKOUT  = True
+ENABLE_RSI_SCALP = True
+
+# --- RSI Parameters ---
+RSI_PERIOD = 14
+RSI_OB     = 70  # Overbought
+RSI_OS     = 30  # Oversold
+
+# --- Breakout Parameters ---
+BREAKOUT_CONFIRMATION_CANDLES = 2
+
+# =============================================================================
+# HIGHER TIMEFRAME (HTF) TREND FILTER
+# =============================================================================
+USE_HTF_FILTER = True
+
+# The timeframe to check for the overall trend (e.g., H1 = 60 minutes)
+HTF_TIMEFRAME_MINUTES = 60
+
+# The period of the Exponential Moving Average (EMA) to determine trend direction
+# Price above EMA = Bullish bias (Only look for buys)
+# Price below EMA = Bearish bias (Only look for sells)
+HTF_EMA_PERIOD = 20
+
+# =============================================================================
+# SAFETY / EXECUTION
+# =============================================================================
+
+# DRY_RUN mode: True = log trades only, False = execute real trades
+DRY_RUN = False
+
+# Max open trades (Sniper-X/V17 Balance)
+MAX_OPEN_TRADES = 2
+
+# Max allowed spread in pips (80.0 for Gold compatibility)
+MAX_SPREAD_PIPS = 80.0
+
+# Cooldown to prevent rapid consecutive trades on the same symbol (in minutes)
+TRADE_COOLDOWN_MINUTES = 5
+
+# How often to check for signals (seconds)
+SCAN_INTERVAL_SECONDS = 10
+
+# How often to log the daily summary (seconds)
+SUMMARY_LOG_INTERVAL_SECONDS = 300  # 5 minutes
+
+# Logging
 LOG_DIR = "logs"
 LOG_LEVEL = "INFO"
-SUMMARY_LOG_INTERVAL_SECONDS = 360
-SCAN_INTERVAL_SECONDS = 5
