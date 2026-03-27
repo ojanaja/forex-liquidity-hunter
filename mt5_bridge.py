@@ -415,7 +415,12 @@ def get_daily_deals() -> list[dict]:
 
     result = []
     for d in deals:
-        # Only include actual trade deals (entry/exit), skip balance ops
+        # Only include actual trade deals (BUY/SELL entries or exits)
+        # Skip Balance (2), Credit (3), etc.
+        if d.type not in (mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL):
+            continue
+            
+        # Also skip if it's a zero-profit balance operation that somehow passed
         if d.entry == 0 and d.profit == 0:
             continue
         result.append({
