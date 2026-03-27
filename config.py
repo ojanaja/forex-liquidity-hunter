@@ -44,7 +44,7 @@ HTF_STRUCTURE_LOOKBACK  = 20       # Candles to detect HH/HL/LH/LL
 # LTF CONFIRMATION (Req #2)
 # =============================================================================
 LTF_TIMEFRAME_MINUTES   = 5        # M5 for entry timing
-MIN_CONFIRMATIONS       = 2        # Need at least 2-3 confluences
+MIN_CONFIRMATIONS       = 3        # 3 confluences for high-quality entries
 
 # =============================================================================
 # SIDEWAYS DETECTION (Req #3) — ATR + Bollinger Band Squeeze
@@ -65,16 +65,16 @@ ENABLE_RSI_SCALP = True
 # --- Strategy Parameters ---
 SCAN_TIMEFRAME_MINUTES  = 1        # Fast M1 scanning
 RANGE_TIMEFRAME_MINUTES = 15       # Session range identification
-SWEEP_THRESHOLD_PIPS    = 0.5      # 0.5 pip sweep sensitivity
-FVG_MIN_SIZE_PIPS       = 0.2      # 0.2 pips minimum gap
-SL_BUFFER_PIPS          = 2.0      # 2.0 pips extra SL room
+SWEEP_THRESHOLD_PIPS    = 2.0      # Ignore micro-sweeps (too noisy at 0.5)
+FVG_MIN_SIZE_PIPS       = 1.0      # Real institutional FVG needs > 1.0 pip
+SL_BUFFER_PIPS          = 3.0      # Extra SL room to avoid stop hunts
 TP_RATIO                = 2.0      # Updated to 1:2 minimum RR (Req #7)
 USE_FVG_50_ENTRY        = True     # 50% Consequent Encroachment
 
 # --- RSI Parameters ---
 RSI_PERIOD = 14
-RSI_OB     = 70  # Overbought
-RSI_OS     = 30  # Oversold
+RSI_OB     = 75  # Overbought (tighter = fewer but better signals)
+RSI_OS     = 25  # Oversold   (tighter = fewer but better signals)
 
 # --- Breakout Parameters ---
 BREAKOUT_CONFIRMATION_CANDLES = 2
@@ -95,8 +95,8 @@ MIN_RISK_REWARD_RATIO = 2.0       # Minimum 1:2 RR required
 #   TP3 (3R):  Keep remaining 30%, REMOVE TP, move SL to TP2, start trailing
 # =============================================================================
 ENABLE_CHECKPOINT_TP        = True
-TP_CHECKPOINTS              = [1.0, 2.0, 3.0]    # Checkpoint levels in R multiples
-TP_PARTIAL_CLOSE_PCTS       = [0.40, 0.30, 0.00]  # % of ORIGINAL volume to close at each
+TP_CHECKPOINTS              = [1.5, 2.5, 3.5]    # Higher checkpoints = bigger partial wins
+TP_PARTIAL_CLOSE_PCTS       = [0.30, 0.30, 0.00]  # Less closed early = more rides to TP2+
 ENABLE_TRAILING_AFTER_FINAL = True                 # Trail SL after last checkpoint
 TRAILING_STEP_PIPS          = 10.0                 # Trail SL step size in pips
 TRAILING_ACTIVATION_R       = 3.0                  # Start trailing after this R level
@@ -141,7 +141,7 @@ SYMBOLS = [
 # =============================================================================
 DRY_RUN = False                    # True = log only, False = real trades
 MAX_SPREAD_PIPS = 80.0             # Max allowed spread (80.0 for Gold)
-TRADE_COOLDOWN_MINUTES = 5         # Cooldown per symbol (minutes)
+TRADE_COOLDOWN_MINUTES = 30        # Prevent rapid re-entry on same symbol
 SCAN_INTERVAL_SECONDS = 10         # How often to check for signals
 SUMMARY_LOG_INTERVAL_SECONDS = 300 # 5 minutes
 
