@@ -26,9 +26,8 @@ PROFIT_TARGET           = 600.0    # 6% monthly target
 DAILY_PROFIT_CAP        = 200.0    # Consistency rule enforcement
 
 # =============================================================================
-# DAILY TRADE LIMIT (Req #1)
+# CONCURRENT TRADE LIMIT
 # =============================================================================
-MAX_TRADES_PER_DAY = 3             # Max 1-3 trades per day
 MAX_OPEN_TRADES    = 2             # Max simultaneous open trades
 
 # =============================================================================

@@ -86,15 +86,7 @@ class RiskManager:
             mt5_bridge.close_all_positions()
             return False
 
-        # Rule 3: Daily Trade Limit
-        max_daily = getattr(config, "MAX_TRADES_PER_DAY", 3)
-        if self.daily_trade_count >= max_daily:
-            logger.info(
-                f"Daily trade limit reached ({self.daily_trade_count}/{max_daily})"
-            )
-            return False
-
-        # Rule 4: Daily Profit Cap (consistency) - LOG ONLY per user request
+        # Rule 3: Daily Profit Cap (consistency) - LOG ONLY per user request
         if total_daily_pnl >= config.DAILY_PROFIT_CAP:
             logger.info(
                 f"🎯 Daily profit cap reached: +${total_daily_pnl:.2f}. "

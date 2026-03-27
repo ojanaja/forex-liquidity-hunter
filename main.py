@@ -110,8 +110,7 @@ def main():
     # Log bot rules
     logger.info(
         f"Bot Rules: "
-        f"Max {config.MAX_TRADES_PER_DAY} trades/day, "
-        f"Max {config.MAX_OPEN_TRADES} open, "
+        f"Max {config.MAX_OPEN_TRADES} concurrent trades, "
         f"Risk {config.MAX_RISK_PER_TRADE_PCT}%/trade, "
         f"Min RR 1:{config.MIN_RISK_REWARD_RATIO}, "
         f"Min {config.MIN_CONFIRMATIONS} confirmations, "
