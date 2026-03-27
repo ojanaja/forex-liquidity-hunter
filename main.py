@@ -118,8 +118,8 @@ def main():
 
                 signal = strategy.generate_signal(symbol)
                 if signal:
-                    # Risk Check
-                    lot_size = risk.calculate_lot_size(symbol, signal.sl_pips)
+                    # Risk Check - fixed argument order
+                    lot_size = risk.calculate_lot_size(signal.sl_pips, symbol)
                     if not lot_size:
                         continue
 

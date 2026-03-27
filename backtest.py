@@ -161,7 +161,7 @@ def run_backtest():
     
     # Target 3 months as requested (approx 90 days)
     DAYS_BACK = 90
-    print(f"🚀 Starting 3-Month Historical Audit (Last {DAYS_BACK} days)...")
+    print(f"Starting 3-Month Historical Audit (Last {DAYS_BACK} days)...")
     
     symbol_data_cache = {}
     total_min_date = datetime.now()
@@ -170,17 +170,17 @@ def run_backtest():
         print(f"📥 Loading {symbol}...", end="\r")
         df_m5, df_h1 = get_symbol_data(symbol, days_back=DAYS_BACK)
         if df_m5 is not None and not df_m5.empty:
-            print(f"   ✅ {symbol}: Loaded {len(df_m5)} candles.")
+            print(f"   OK {symbol}: Loaded {len(df_m5)} candles.")
             symbol_data_cache[symbol] = (df_m5, df_h1)
             total_min_date = min(total_min_date, df_m5.index.min())
         else:
-            print(f"   ⚠️ {symbol}: No history found for last {DAYS_BACK} days.")
+            print(f"   WARNING {symbol}: No history found for last {DAYS_BACK} days.")
 
     if not symbol_data_cache:
-        print("❌ Error: No historical data available on this broker.")
+        print("ERROR: No historical data available on this broker.")
         mt5.shutdown(); return
 
-    print(f"✅ Data found starting from: {total_min_date.strftime('%Y-%m-%d')}")
+    print(f"Data found starting from: {total_min_date.strftime('%Y-%m-%d')}")
     
     # Generate list of months to test from total_min_date to now
     test_months = []
@@ -213,7 +213,7 @@ def run_backtest():
         consistency_pct = (max_win_day / total_pnl * 100) if total_pnl > 0 else 0
         wr = (len([t for t in trades if t["pnl"] > 0]) / len(trades) * 100) if trades else 0
         
-        status = "✅" if consistency_pct <= 30.0 and total_pnl >= 0 else ("❌" if total_pnl > 0 else "⚪")
+        status = "PASS" if consistency_pct <= 30.0 and total_pnl >= 0 else ("FAIL" if total_pnl > 0 else "---")
         
         month_name = m_start.strftime("%B %Y")
         print(f"{month_name:<12} | {len(trades):<6} | {wr:>5.1f}% | ${total_pnl:>8.2f} | {consistency_pct:>7.1f}% | {status}")

@@ -311,7 +311,7 @@ def modify_position_sl(ticket: int, new_sl: float) -> bool:
 
     result = mt5.order_send(request)
     if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-        logger.info(f"🛡️ Auto Break-Even: Moved ticket {ticket} SL to {new_sl:.5f}")
+        logger.info(f"Auto Break-Even: Moved ticket {ticket} SL to {new_sl:.5f}")
         return True
 
     err = result.comment if result else "Unknown error"

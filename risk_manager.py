@@ -57,7 +57,7 @@ class RiskManager:
         self._check_new_day()
 
         if self.is_stopped_for_day:
-            logger.info(f"⛔ Stopped for today: {self.stop_reason}")
+            logger.info(f"STOPPED for today: {self.stop_reason}")
             return False
 
         # Rule 1: Daily Loss Limit
@@ -87,7 +87,7 @@ class RiskManager:
         # Rule 4: Daily Profit Cap (consistency) - LOG ONLY per user request
         if total_daily_pnl >= config.DAILY_PROFIT_CAP:
             logger.info(
-                f"🎯 Daily profit cap reached: +${total_daily_pnl:.2f}. "
+                f"Daily profit cap reached: +${total_daily_pnl:.2f}. "
                 f"Continuing trade per user preference."
             )
             # return False <-- Disabled to allow $600/month target achievement
@@ -170,9 +170,8 @@ class RiskManager:
         else:
             self.daily_losses += 1
 
-        emoji = "✅" if profit >= 0 else "❌"
         logger.info(
-            f"{emoji} Trade closed: {symbol} ${profit:+.2f} | "
+            f"Trade CLOSED: {symbol} ${profit:+.2f} | "
             f"Daily P/L: ${self.daily_realized_pnl:+.2f} | "
             f"Cumulative: ${(self.cumulative_pnl + self.daily_realized_pnl):+.2f}"
         )
@@ -233,25 +232,25 @@ class RiskManager:
         s = self.get_daily_summary()
         logger.info(
             f"\n{'='*50}\n"
-            f"📊 DAILY SUMMARY — {s['date']}\n"
+            f"DAILY SUMMARY --- {s['date']}\n"
             f"{'='*50}\n"
             f"  Realized P/L:   ${s['daily_realized_pnl']:+.2f}\n"
             f"  Floating P/L:   ${s['daily_floating_pnl']:+.2f}\n"
             f"  Total Today:    ${s['daily_total_pnl']:+.2f}\n"
             f"  Cumulative:     ${s['cumulative_pnl']:+.2f}\n"
             f"  Trades: {s['trades_today']} "
-            f"(W: {s['wins']} / L: {s['losses']} — "
+            f"(W: {s['wins']} / L: {s['losses']} --- "
             f"{s['win_rate']}%)\n"
             f"  To Target:      ${s['distance_to_target']:+.2f}\n"
-            f"  Status:         {'🛑 STOPPED' if s['is_stopped'] else '🟢 ACTIVE'}\n"
+            f"  Status:         {'STOPPED' if s['is_stopped'] else 'ACTIVE'}\n"
             f"{'='*50}"
         )
 
         # Check if profit target reached
         if s["cumulative_pnl"] >= config.PROFIT_TARGET:
             logger.info(
-                f"🎉🎉🎉 PROFIT TARGET REACHED! "
-                f"${s['cumulative_pnl']:.2f} / ${config.PROFIT_TARGET:.2f} 🎉🎉🎉"
+                f"PROFIT TARGET REACHED! "
+                f"${s['cumulative_pnl']:.2f} / ${config.PROFIT_TARGET:.2f}"
             )
 
     # ===================================================================
@@ -287,7 +286,7 @@ class RiskManager:
         """Mark the bot as stopped for the rest of the day."""
         self.is_stopped_for_day = True
         self.stop_reason = reason
-        logger.warning(f"🛑 BOT STOPPED: {reason}")
+        logger.warning(f"BOT STOPPED: {reason}")
 
     def _check_new_day(self):
         """Reset daily counters if a new trading day has started."""

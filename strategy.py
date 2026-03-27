@@ -153,7 +153,7 @@ def detect_market_regime(symbol: str) -> str:
     regime = "SIDEWAYS"
     if adx > config.ADX_TRENDING_THRESHOLD:
         regime = "TREND_UP" if e20 > e50 else "TREND_DOWN"
-    logger.info(f"🔍 {symbol} Intelligence: {regime} (ADX: {adx:.1f})")
+    logger.info(f"[Intelligence] {symbol}: {regime} (ADX: {adx:.1f})")
     return regime
 
 
