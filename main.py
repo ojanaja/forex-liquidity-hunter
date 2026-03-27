@@ -90,7 +90,7 @@ def main():
             manage_existing_trades()
 
             # --- 2. Check risk limits ---
-            if not risk.can_trade_today():
+            if not risk.can_trade():
                 logger.warning("Daily risk limit reached. Standing down.")
                 time.sleep(60)
                 continue
