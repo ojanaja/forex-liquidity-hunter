@@ -440,7 +440,7 @@ def process_checkpoints(trade: BacktestTrade, high: float, low: float, pip_size:
 
 _ticket_counter = 0
 
-def run_monthly_backtest(symbol_data_cache, start_date, end_date):
+def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=None):
     """
     Full simulation matching live bot logic.
     Processes all symbols bar-by-bar with multi-strategy, validation, and checkpoints.
@@ -448,6 +448,15 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date):
     global _ticket_counter
     all_closed_trades = []
     open_trades: list[BacktestTrade] = []
+
+    # Diagnostic counters
+    if diagnostics is None:
+        diagnostics = {}
+    dx = diagnostics
+    for key in ["candles", "in_session", "htf_sideways", "mkt_sideways",
+                "corr_block", "no_signal", "rr_fail", "confirm_fail",
+                "trades_opened", "concurrent_block"]:
+        dx.setdefault(key, 0)
 
     for symbol, (df_m5_all, df_h1_all, df_m15_all) in symbol_data_cache.items():
         info = mt5.symbol_info(symbol)
@@ -553,7 +562,9 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date):
                 continue
 
             # ── Concurrent trade limit ──
+            dx["candles"] += 1
             if len(open_trades) >= config.MAX_OPEN_TRADES:
+                dx["concurrent_block"] += 1
                 continue
 
             # ── Session window check ──
@@ -569,6 +580,8 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date):
             if active_s_h is None:
                 continue
 
+            dx["in_session"] += 1
+
             # ══════════════════════════════════════════════════
             # VALIDATION GATE (mirrors market_filter.validate_entry)
             # ══════════════════════════════════════════════════
@@ -576,14 +589,17 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date):
             # 1. HTF Trend
             htf_trend = compute_htf_trend(df_h1, ts)
             if htf_trend == "SIDEWAYS":
+                dx["htf_sideways"] += 1
                 continue
 
             # 2. Sideways detection
             if check_sideways(df_h1, ts):
+                dx["mkt_sideways"] += 1
                 continue
 
             # 3. Correlation filter
             if not check_correlation(symbol, open_trades):
+                dx["corr_block"] += 1
                 continue
 
             # ══════════════════════════════════════════════════
@@ -614,8 +630,8 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date):
                                 te = (older["low"] + newer["high"]) / 2 if config.USE_FVG_50_ENTRY else newer["high"]
                                 sl = max(can["high"] for can in cl[-12:]) + sl_buff
                                 sl_p = (sl - te) / pip_size
-                                rr = ((te - sl) * config.TP_RATIO) / (sl - te) if (sl - te) != 0 else 0
-                                if 3.0 <= sl_p <= max_sl_p and abs(rr) >= config.MIN_RISK_REWARD_RATIO:
+                                rr = config.TP_RATIO  # TP = entry - risk * TP_RATIO, so RR = TP_RATIO
+                                if 3.0 <= sl_p <= max_sl_p and rr >= config.MIN_RISK_REWARD_RATIO:
                                     signal = {
                                         "type": "SELL", "entry": te, "sl": sl,
                                         "tp": te - (sl - te) * config.TP_RATIO,
@@ -628,7 +644,7 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date):
                                 te = (newer["low"] + older["high"]) / 2 if config.USE_FVG_50_ENTRY else newer["low"]
                                 sl = min(can["low"] for can in cl[-12:]) - sl_buff
                                 sl_p = (te - sl) / pip_size
-                                rr = ((te - sl) * config.TP_RATIO) / (te - sl) if (te - sl) != 0 else 0
+                                rr = config.TP_RATIO  # TP = entry + risk * TP_RATIO, so RR = TP_RATIO
                                 if 3.0 <= sl_p <= max_sl_p and rr >= config.MIN_RISK_REWARD_RATIO:
                                     signal = {
                                         "type": "BUY", "entry": te, "sl": sl,
@@ -687,15 +703,20 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date):
             # ══════════════════════════════════════════════════
             # FINAL VALIDATION: LTF Confirmations
             # ══════════════════════════════════════════════════
+            if signal is None:
+                dx["no_signal"] += 1
+
             if signal is not None:
                 confirms = count_ltf_confirmations(df_m5, ts, signal["type"])
                 if confirms < config.MIN_CONFIRMATIONS:
+                    dx["confirm_fail"] += 1
                     signal = None  # Not enough confluences
 
             # ══════════════════════════════════════════════════
             # OPEN TRADE
             # ══════════════════════════════════════════════════
             if signal is not None:
+                dx["trades_opened"] += 1
                 _ticket_counter += 1
                 risk_dist = abs(signal["entry"] - signal["sl"])
 
@@ -1103,11 +1124,12 @@ def run_backtest():
     all_trades_combined = []
     monthly_results = []
     bt_start = _time.time()
+    diagnostics = {}
 
     for month_idx, (m_start, m_end) in enumerate(test_months):
         _progress_bar(month_idx, len(test_months), prefix="Backtest", start_time=bt_start)
 
-        trades = run_monthly_backtest(symbol_data_cache, m_start, m_end)
+        trades = run_monthly_backtest(symbol_data_cache, m_start, m_end, diagnostics)
         all_trades_combined.extend(trades)
 
         gross = sum(t.gross_pnl for t in trades)
@@ -1134,6 +1156,19 @@ def run_backtest():
     print(f"  Completed in {elapsed:.1f}s ({len(all_trades_combined)} trades)")
 
     mt5.shutdown()
+
+    # Diagnostic Summary
+    print(f"\n  DIAGNOSTIC: Filter Rejection Breakdown")
+    print("  " + "-" * 50)
+    print(f"  Candles processed:   {diagnostics.get('candles', 0):>8}")
+    print(f"  In session window:   {diagnostics.get('in_session', 0):>8}")
+    print(f"  HTF = SIDEWAYS:      {diagnostics.get('htf_sideways', 0):>8}  (blocked)")
+    print(f"  Market sideways:     {diagnostics.get('mkt_sideways', 0):>8}  (blocked)")
+    print(f"  Correlation block:   {diagnostics.get('corr_block', 0):>8}  (blocked)")
+    print(f"  Concurrent block:    {diagnostics.get('concurrent_block', 0):>8}  (blocked)")
+    print(f"  No signal generated: {diagnostics.get('no_signal', 0):>8}")
+    print(f"  Confirm fail (<{config.MIN_CONFIRMATIONS}):  {diagnostics.get('confirm_fail', 0):>8}  (blocked)")
+    print(f"  Trades opened:       {diagnostics.get('trades_opened', 0):>8}")
 
     # Phase 3: Monthly Table
     print(f"\n  PHASE 3: Monthly Breakdown")
