@@ -181,8 +181,18 @@ def compute_htf_trend(df_h1: pd.DataFrame, ts) -> str:
         else:
             structure = "SIDEWAYS"
 
-    # Both must agree
-    return ema_trend if ema_trend == structure else "SIDEWAYS"
+    # Consensus logic:
+    # - EMA is the PRIMARY trend indicator
+    # - Structure only VETOES if it actively contradicts (UP vs DOWN)
+    # - If structure is unclear (SIDEWAYS), trust the EMA
+    if ema_trend == structure:
+        return ema_trend  # Perfect agreement
+    elif structure == "SIDEWAYS":
+        return ema_trend  # EMA has a direction, structure unclear → trust EMA
+    elif ema_trend == "SIDEWAYS":
+        return structure  # EMA flat, but structure has direction → trust structure
+    else:
+        return "SIDEWAYS"  # EMA and structure actively contradict (UP vs DOWN)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

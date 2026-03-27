@@ -105,13 +105,22 @@ def get_htf_trend(symbol: str) -> Optional[str]:
     # Market structure confirmation
     structure = _compute_market_structure(df, config.HTF_STRUCTURE_LOOKBACK)
 
-    # Both must agree for a clear trend
+    # Consensus: EMA is primary, structure only vetoes on active contradiction
     if ema_trend == structure:
         logger.debug(f"[HTF] {symbol}: {ema_trend} (EMA + Structure confirmed)")
         return ema_trend
+    elif structure == "SIDEWAYS":
+        # EMA has a direction, structure unclear → trust EMA
+        logger.debug(f"[HTF] {symbol}: {ema_trend} (EMA primary, structure unclear)")
+        return ema_trend
+    elif ema_trend == "SIDEWAYS":
+        # EMA flat, structure has direction → trust structure
+        logger.debug(f"[HTF] {symbol}: {structure} (Structure primary, EMA flat)")
+        return structure
     else:
+        # Active contradiction (UP vs DOWN)
         logger.debug(
-            f"[HTF] {symbol}: SIDEWAYS (EMA={ema_trend}, Structure={structure})"
+            f"[HTF] {symbol}: SIDEWAYS (EMA={ema_trend}, Structure={structure} — conflict)"
         )
         return "SIDEWAYS"
 
