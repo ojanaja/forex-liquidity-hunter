@@ -195,10 +195,12 @@ def generate_signal(symbol: str) -> Optional[Signal]:
         sw = detect_sweep(symbol, rg["high"], rg["low"])
         if sw:
             dir = "BUY" if sw["type"] == "LOW_SWEPT" else "SELL"
-            if (regime == "TREND_UP" and dir == "SELL") or (regime == "TREND_DOWN" and dir == "BUY"): pass
-            else:
+            # Trend Check: SMC usually looks for reversal or trend expansion
+            # Allow: SIDEWAYS (any), TREND_UP (BUY), TREND_DOWN (SELL)
+            if regime == "SIDEWAYS" or (regime == "TREND_UP" and dir == "BUY") or (regime == "TREND_DOWN" and dir == "SELL"):
                 ent = detect_fvg_entry(symbol, sw)
                 if ent:
+                    logger.info(f"SIGNAL: {symbol} SMC candidate {dir} found!")
                     sl_p = abs(ent["fvg_entry"] - ent["wick_tip"]) / pip_size
                     return Signal(symbol, dir, ent["fvg_entry"], ent["wick_tip"], ent["fvg_entry"] + (ent["fvg_entry"] - ent["wick_tip"]) * config.TP_RATIO, sl_p, f"SMC ({regime})")
 
@@ -207,8 +209,9 @@ def generate_signal(symbol: str) -> Optional[Signal]:
         br = detect_breakout(symbol, rg["high"], rg["low"])
         if br:
             dir = "BUY" if "BUY" in br["type"] else "SELL"
-            if regime != "SIDEWAYS" and regime not in br["type"]: pass
-            else:
+            # Trend Check: Breakout MUST match trend or be SIDEWAYS
+            if regime == "SIDEWAYS" or (regime == "TREND_UP" and dir == "BUY") or (regime == "TREND_DOWN" and dir == "SELL"):
+                logger.info(f"SIGNAL: {symbol} Breakout candidate {dir} found!")
                 sl_p = abs(br["entry"] - br["sl"]) / pip_size
                 return Signal(symbol, dir, br["entry"], br["sl"], br["tp"], sl_p, f"Breakout ({regime})")
 
@@ -218,7 +221,8 @@ def generate_signal(symbol: str) -> Optional[Signal]:
         if rs:
             dir = "BUY" if "BUY" in rs["type"] else "SELL"
             if regime == "SIDEWAYS":
+                logger.info(f"SIGNAL: {symbol} RSI Scalp candidate {dir} found!")
                 sl_p = abs(rs["entry"] - rs["sl"]) / pip_size
-                return Signal(symbol, dir, rs["entry"], rs["sl"], rs["tp"], sl_p, f"Scalp ({regime})")
+                return Signal(symbol, dir, rs["entry"], rs["sl"], rs["tp"], sl_p, f"RSI_Scalp ({regime})")
 
     return None
