@@ -54,16 +54,28 @@ SESSIONS = [
 TIMEZONE = "Asia/Jakarta"  # UTC+7
 
 # =============================================================================
-# TRADING PAIRS
+# TRADING PAIRS (Multi-Asset Global Selection)
 # =============================================================================
 SYMBOLS = [
-    "EURUSDx",
-    "GBPUSDx",
-    "USDJPYx",
-    "EURJPYx",
-    "GBPJPYx",
-    "XAUUSDx",   # Gold is highly volatile, ensure MAX_SPREAD_PIPS accommodates it
+    "EURUSDx", "GBPUSDx", "USDJPYx", "EURJPYx", "GBPJPYx", "XAUUSDx",
+    "AUDUSDx", "NZDUSDx", "USDCADx", "USDCHFx", "EURGBPx", "EURAUDx", 
+    "AUDJPYx", "CADJPYx"
 ]
+
+# =============================================================================
+# STRATEGY MODULES (V17 Multi-Engine)
+# =============================================================================
+ENABLE_SMC_SWEEP = True
+ENABLE_BREAKOUT  = True
+ENABLE_RSI_SCALP = True
+
+# --- RSI Parameters ---
+RSI_PERIOD = 14
+RSI_OB     = 70  # Overbought
+RSI_OS     = 30  # Oversold
+
+# --- Breakout Parameters ---
+BREAKOUT_CONFIRMATION_CANDLES = 2
 
 # =============================================================================
 # HIGHER TIMEFRAME (HTF) TREND FILTER
@@ -84,6 +96,9 @@ HTF_EMA_PERIOD = 20
 
 # DRY_RUN mode: True = log trades only, False = execute real trades
 DRY_RUN = False
+
+# Max open trades (Sniper-X/V17 Balance)
+MAX_OPEN_TRADES = 2
 
 # Max allowed spread in pips (80.0 for Gold compatibility)
 MAX_SPREAD_PIPS = 80.0
