@@ -159,8 +159,8 @@ def main():
             # --- Scan each symbol for signals ---
             open_positions = mt5_bridge.get_open_positions()
             
-            # --- Auto Break-Even Manager (with commission/spread) ---
-            _manage_auto_break_even(open_positions)
+            # --- Checkpoint TP Manager (partial close + trailing) ---
+            _manage_checkpoints(open_positions)
             
             open_symbols = [p.symbol for p in open_positions]
 
@@ -286,27 +286,87 @@ def _sync_closed_trades(risk: RiskManager):
 
 
 # ======================================================================
-# Auto Break-Even Manager (with Commission + Spread Protection)
+# Hybrid TP Checkpoint Manager
 # ======================================================================
+# Tracks per-ticket state:
+#   - original_volume: lot size at entry
+#   - risk_distance: entry-to-SL distance (1R)
+#   - checkpoints_hit: [bool, bool, bool] for TP1/TP2/TP3
+#   - trailing_active: True after final checkpoint
+#   - trailing_high: highest price seen (for trailing SL)
 
-def _manage_auto_break_even(open_positions):
+_checkpoint_state: dict[int, dict] = {}
+
+
+def _calc_be_buffer(sym_info, volume: float, pip_size: float) -> float:
+    """Calculate commission + spread buffer in price distance."""
+    commission_per_lot = getattr(config, "ESTIMATED_COMMISSION_PER_LOT", 7.0)
+    spread_pips = getattr(config, "ESTIMATED_SPREAD_COST_PIPS", 1.5)
+
+    pip_value = sym_info.trade_tick_value * (pip_size / sym_info.point)
+    if pip_value > 0:
+        commission_distance = (commission_per_lot / pip_value) * pip_size
+    else:
+        commission_distance = 0
+
+    spread_distance = spread_pips * pip_size
+    return commission_distance + spread_distance
+
+
+def _get_checkpoint_price(entry: float, risk_distance: float, r_level: float, direction: str) -> float:
+    """Calculate the price level for a given R multiple."""
+    if direction == "BUY":
+        return entry + (risk_distance * r_level)
+    else:
+        return entry - (risk_distance * r_level)
+
+
+def _manage_checkpoints(open_positions):
     """
-    Checks all open positions. If profit exceeds the risk threshold (e.g., 1.1R),
-    moves the Stop Loss to Entry Price + Commission + Spread.
-    This ensures the trade cannot result in a net loss even if SL is hit.
+    Hybrid TP Checkpoint Manager.
+
+    For each open position:
+    - Track which checkpoints (TP1, TP2, TP3) have been hit
+    - At each checkpoint: partial close + move SL
+    - After final checkpoint: remove TP, enable trailing SL
     """
-    if not getattr(config, "AUTO_BREAK_EVEN", False):
+    if not getattr(config, "ENABLE_CHECKPOINT_TP", False):
         return
 
-    ratio_threshold = getattr(config, "BE_ACTIVATION_RATIO", 1.0)
-    
-    for p in open_positions:
-        # If SL is already at or past entry, we don't need to break even
-        if p.type == 0 and p.sl >= p.price_open:  # BUY
-            continue
-        if p.type == 1 and p.sl > 0 and p.sl <= p.price_open:  # SELL
-            continue
+    checkpoints = getattr(config, "TP_CHECKPOINTS", [1.0, 2.0, 3.0])
+    partial_pcts = getattr(config, "TP_PARTIAL_CLOSE_PCTS", [0.40, 0.30, 0.00])
+    trailing_step = getattr(config, "TRAILING_STEP_PIPS", 10.0)
 
+    active_tickets = set()
+
+    for p in open_positions:
+        active_tickets.add(p.ticket)
+        direction = "BUY" if p.type == 0 else "SELL"
+
+        # --- Initialize state for new positions ---
+        if p.ticket not in _checkpoint_state:
+            risk_distance = abs(p.price_open - p.sl)
+            if risk_distance < 0.00001:
+                continue
+
+            _checkpoint_state[p.ticket] = {
+                "original_volume": p.volume,
+                "entry_price": p.price_open,
+                "original_sl": p.sl,
+                "risk_distance": risk_distance,
+                "direction": direction,
+                "checkpoints_hit": [False] * len(checkpoints),
+                "trailing_active": False,
+                "trailing_high": p.price_open if direction == "BUY" else p.price_open,
+            }
+            logger.debug(
+                f"[CHECKPOINT] Tracking ticket {p.ticket} {direction} {p.symbol}: "
+                f"entry={p.price_open:.5f}, risk={risk_distance:.5f}"
+            )
+
+        state = _checkpoint_state[p.ticket]
+
+        # --- Get current price ---
         price = mt5_bridge.get_current_price(p.symbol)
         if price is None:
             continue
@@ -317,56 +377,121 @@ def _manage_auto_break_even(open_positions):
 
         pip_size = sym_info.point * 10 if sym_info.digits in (3, 5) else sym_info.point
 
-        # Calculate 1R distance (Entry to original SL)
-        risk_distance = abs(p.price_open - p.sl)
-        
-        # Avoid division by zero
-        if risk_distance < 0.00001:
-            continue
-
-        # Calculate commission + spread buffer to add to BE level
-        # Commission per lot (divided by 2 for single direction approximate)
-        commission_per_lot = getattr(config, "ESTIMATED_COMMISSION_PER_LOT", 7.0)
-        spread_pips = getattr(config, "ESTIMATED_SPREAD_COST_PIPS", 1.5)
-
-        # Convert commission to price distance
-        # commission_distance = (commission_per_lot * volume) / (pip_value * volume) ≈ commission / pip_value
-        pip_value = sym_info.trade_tick_value * (pip_size / sym_info.point)
-        if pip_value > 0:
-            commission_distance = (commission_per_lot * p.volume) / (pip_value * p.volume) * pip_size
+        # Calculate current R achieved
+        if direction == "BUY":
+            current_price = price["bid"]
+            current_profit_dist = current_price - state["entry_price"]
         else:
-            commission_distance = 0
+            current_price = price["ask"]
+            current_profit_dist = state["entry_price"] - current_price
 
-        spread_distance = spread_pips * pip_size
-        be_buffer = commission_distance + spread_distance
+        rr_achieved = current_profit_dist / state["risk_distance"]
 
-        if p.type == 0:  # BUY
-            current_profit_dist = price['bid'] - p.price_open
-            rr_achieved = current_profit_dist / risk_distance
-            
-            if rr_achieved >= ratio_threshold:
-                # BE level = entry + buffer (so even if hit, covers costs)
-                be_level = p.price_open + be_buffer
-                mt5_bridge.modify_position_sl(p.ticket, be_level)
+        # --- Process each checkpoint ---
+        for i, (r_level, close_pct) in enumerate(zip(checkpoints, partial_pcts)):
+            if state["checkpoints_hit"][i]:
+                continue  # Already hit
+
+            if rr_achieved >= r_level:
+                state["checkpoints_hit"][i] = True
+                cp_name = f"TP{i+1}"
+
                 logger.info(
-                    f"[BE] BUY {p.symbol} ticket {p.ticket}: "
-                    f"SL moved to {be_level:.5f} "
-                    f"(entry={p.price_open:.5f} + buffer={be_buffer:.5f})"
+                    f"[CHECKPOINT] {cp_name} HIT! {p.symbol} ticket {p.ticket} "
+                    f"at {rr_achieved:.2f}R (level: {r_level}R)"
                 )
-                
-        else:  # SELL
-            current_profit_dist = p.price_open - price['ask']
-            rr_achieved = current_profit_dist / risk_distance
-            
-            if rr_achieved >= ratio_threshold:
-                # BE level = entry - buffer
-                be_level = p.price_open - be_buffer
-                mt5_bridge.modify_position_sl(p.ticket, be_level)
-                logger.info(
-                    f"[BE] SELL {p.symbol} ticket {p.ticket}: "
-                    f"SL moved to {be_level:.5f} "
-                    f"(entry={p.price_open:.5f} - buffer={be_buffer:.5f})"
-                )
+
+                # --- Partial close ---
+                if close_pct > 0:
+                    volume_to_close = round(state["original_volume"] * close_pct, 2)
+                    if volume_to_close >= 0.01:
+                        mt5_bridge.partial_close_position(p.ticket, volume_to_close)
+                        logger.info(
+                            f"[CHECKPOINT] {cp_name}: Closed {close_pct*100:.0f}% "
+                            f"({volume_to_close} lots) of {p.symbol}"
+                        )
+
+                # --- Move SL ---
+                if i == 0:
+                    # TP1: SL to Breakeven + commission/spread
+                    be_buffer = _calc_be_buffer(sym_info, p.volume, pip_size)
+                    if direction == "BUY":
+                        new_sl = state["entry_price"] + be_buffer
+                    else:
+                        new_sl = state["entry_price"] - be_buffer
+                    mt5_bridge.modify_position_sl(p.ticket, new_sl)
+                    logger.info(
+                        f"[CHECKPOINT] {cp_name}: SL -> BE+buffer ({new_sl:.5f})"
+                    )
+                else:
+                    # TP2+: SL to previous checkpoint level
+                    prev_r = checkpoints[i - 1]
+                    new_sl = _get_checkpoint_price(
+                        state["entry_price"], state["risk_distance"],
+                        prev_r, direction
+                    )
+                    mt5_bridge.modify_position_sl(p.ticket, new_sl)
+                    logger.info(
+                        f"[CHECKPOINT] {cp_name}: SL -> TP{i} level ({new_sl:.5f})"
+                    )
+
+                # --- After final checkpoint: remove TP, enable trailing ---
+                is_final = (i == len(checkpoints) - 1)
+                if is_final and getattr(config, "ENABLE_TRAILING_AFTER_FINAL", True):
+                    state["trailing_active"] = True
+                    state["trailing_high"] = current_price
+
+                    # Remove TP (set to 0) — let it ride!
+                    final_sl = _get_checkpoint_price(
+                        state["entry_price"], state["risk_distance"],
+                        checkpoints[-2] if len(checkpoints) >= 2 else checkpoints[-1],
+                        direction
+                    )
+                    mt5_bridge.modify_position_sl_tp(p.ticket, final_sl, 0.0)
+                    logger.info(
+                        f"[CHECKPOINT] TP REMOVED! {p.symbol} now trailing. "
+                        f"SL locked at TP{len(checkpoints)-1} level ({final_sl:.5f})"
+                    )
+
+        # --- Trailing SL (after final checkpoint) ---
+        if state["trailing_active"]:
+            trail_dist = trailing_step * pip_size
+
+            if direction == "BUY":
+                # Update high watermark
+                if current_price > state["trailing_high"]:
+                    state["trailing_high"] = current_price
+
+                # Trail SL behind the high watermark
+                trail_sl = state["trailing_high"] - trail_dist
+                if trail_sl > p.sl:
+                    mt5_bridge.modify_position_sl(p.ticket, trail_sl)
+                    logger.info(
+                        f"[TRAIL] {p.symbol} ticket {p.ticket}: "
+                        f"SL trailed to {trail_sl:.5f} "
+                        f"(high={state['trailing_high']:.5f})"
+                    )
+
+            else:  # SELL
+                # Update low watermark
+                if current_price < state["trailing_high"]:
+                    state["trailing_high"] = current_price
+
+                # Trail SL above the low watermark
+                trail_sl = state["trailing_high"] + trail_dist
+                if trail_sl < p.sl or p.sl == 0:
+                    mt5_bridge.modify_position_sl(p.ticket, trail_sl)
+                    logger.info(
+                        f"[TRAIL] {p.symbol} ticket {p.ticket}: "
+                        f"SL trailed to {trail_sl:.5f} "
+                        f"(low={state['trailing_high']:.5f})"
+                    )
+
+    # --- Cleanup: remove state for closed positions ---
+    closed_tickets = set(_checkpoint_state.keys()) - active_tickets
+    for ticket in closed_tickets:
+        del _checkpoint_state[ticket]
+        logger.debug(f"[CHECKPOINT] Cleaned up state for closed ticket {ticket}")
 
 
 # ======================================================================

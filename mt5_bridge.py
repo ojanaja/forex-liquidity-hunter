@@ -317,6 +317,108 @@ def modify_position_sl(ticket: int, new_sl: float) -> bool:
     return False
 
 
+def modify_position_sl_tp(ticket: int, new_sl: float, new_tp: float) -> bool:
+    """Modifies both SL and TP of an existing open position."""
+    if config.DRY_RUN:
+        logger.info(f"[DRY_RUN] Modify ticket {ticket} SL={new_sl:.5f} TP={new_tp:.5f}")
+        return True
+
+    if not MT5_AVAILABLE:
+        return False
+
+    pos = mt5.positions_get(ticket=ticket)
+    if pos is None or len(pos) == 0:
+        return False
+
+    p = pos[0]
+
+    request = {
+        "action": mt5.TRADE_ACTION_SLTP,
+        "position": ticket,
+        "symbol": p.symbol,
+        "sl": new_sl,
+        "tp": new_tp,
+    }
+
+    result = mt5.order_send(request)
+    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+        logger.info(f"Modified ticket {ticket}: SL={new_sl:.5f}, TP={new_tp:.5f}")
+        return True
+
+    err = result.comment if result else "Unknown error"
+    logger.error(f"Failed to modify ticket {ticket}: {err}")
+    return False
+
+
+def partial_close_position(ticket: int, volume_to_close: float) -> bool:
+    """
+    Close a partial volume of an open position.
+    Used by the checkpoint TP system to lock in profits at each level.
+    """
+    if config.DRY_RUN:
+        logger.info(f"[DRY_RUN] Partial close ticket {ticket}: {volume_to_close} lots")
+        return True
+
+    if not MT5_AVAILABLE:
+        return False
+
+    pos = mt5.positions_get(ticket=ticket)
+    if pos is None or len(pos) == 0:
+        logger.error(f"Position {ticket} not found for partial close")
+        return False
+
+    p = pos[0]
+
+    # Ensure we don't try to close more than what's open
+    if volume_to_close >= p.volume:
+        logger.warning(
+            f"Partial close volume ({volume_to_close}) >= position volume ({p.volume}). "
+            f"Clamping to position volume."
+        )
+        volume_to_close = p.volume
+
+    # Round to volume step
+    sym_info = mt5.symbol_info(p.symbol)
+    if sym_info:
+        step = sym_info.volume_step
+        volume_to_close = max(
+            sym_info.volume_min,
+            round(int(volume_to_close / step) * step, 2)
+        )
+
+    price = get_current_price(p.symbol)
+    if price is None:
+        return False
+
+    close_price = price["bid"] if p.type == 0 else price["ask"]
+
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": p.symbol,
+        "volume": volume_to_close,
+        "type": mt5.ORDER_TYPE_SELL if p.type == 0 else mt5.ORDER_TYPE_BUY,
+        "position": ticket,
+        "price": close_price,
+        "deviation": 10,
+        "magic": 0,
+        "comment": f"TP_PARTIAL_{volume_to_close}",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+
+    result = mt5.order_send(request)
+    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+        logger.info(
+            f"Partial close OK: ticket {ticket}, "
+            f"closed {volume_to_close} lots @ {close_price:.5f}"
+        )
+        return True
+
+    err = result.comment if result else "Unknown"
+    logger.error(f"Partial close FAILED: ticket {ticket}: {err}")
+    return False
+
+
 def get_open_positions() -> list[Position]:
     """Return all currently open positions."""
     if not MT5_AVAILABLE:

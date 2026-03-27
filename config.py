@@ -84,10 +84,25 @@ BREAKOUT_CONFIRMATION_CANDLES = 2
 MIN_RISK_REWARD_RATIO = 2.0       # Minimum 1:2 RR required
 
 # =============================================================================
-# AUTO BREAK-EVEN + COMMISSION (Req #4)
+# HYBRID TP CHECKPOINT SYSTEM
 # =============================================================================
-AUTO_BREAK_EVEN             = True
-BE_ACTIVATION_RATIO         = 1.1   # 1.1R before moving to BE
+# Checkpoint levels in multiples of Risk (1R = SL distance)
+# At each checkpoint: partial close + move SL to previous checkpoint
+# After final checkpoint: remove TP and trail SL
+#
+# Example with TP_CHECKPOINTS = [1.0, 2.0, 3.0]:
+#   TP1 (1R):  Close 40%, move SL to BE + commission
+#   TP2 (2R):  Close 30%, move SL to TP1 level
+#   TP3 (3R):  Keep remaining 30%, REMOVE TP, move SL to TP2, start trailing
+# =============================================================================
+ENABLE_CHECKPOINT_TP        = True
+TP_CHECKPOINTS              = [1.0, 2.0, 3.0]    # Checkpoint levels in R multiples
+TP_PARTIAL_CLOSE_PCTS       = [0.40, 0.30, 0.00]  # % of ORIGINAL volume to close at each
+ENABLE_TRAILING_AFTER_FINAL = True                 # Trail SL after last checkpoint
+TRAILING_STEP_PIPS          = 10.0                 # Trail SL step size in pips
+TRAILING_ACTIVATION_R       = 3.0                  # Start trailing after this R level
+
+# Commission / spread buffer for BE level
 ESTIMATED_COMMISSION_PER_LOT = 7.0  # $ per round-turn lot
 ESTIMATED_SPREAD_COST_PIPS  = 1.5   # Fallback spread cost in pips
 
