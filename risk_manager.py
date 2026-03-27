@@ -156,11 +156,12 @@ class RiskManager:
     # Trade Recording
     # ===================================================================
 
-    def record_trade(self, profit: float, symbol: str = ""):
-        """Call this after every trade closes."""
+    def record_trade(self, profit: float, commission: float = 0.0, swap: float = 0.0, symbol: str = ""):
+        """Call this after every trade closes to record Net P/L."""
         self._check_new_day()
 
-        self.daily_realized_pnl += profit
+        net_profit = profit + commission + swap
+        self.daily_realized_pnl += net_profit
         self.daily_trade_count += 1
         self.total_trade_count += 1
 
@@ -176,6 +177,25 @@ class RiskManager:
             f"Cumulative: ${(self.cumulative_pnl + self.daily_realized_pnl):+.2f}"
         )
 
+        self._save_state()
+
+    def sync_closed_trades(self, deals: list[dict]):
+        """
+        Synchronize realized P/L with actual MT5 history deals.
+        Ensures commission and swaps are perfectly accounted for.
+        """
+        if not deals: return
+
+        # Reset daily realized P/L based on actual deal history (Profit + Commission + Swap)
+        total_net_pnl = sum(
+            d.get("profit", 0.0) + d.get("commission", 0.0) + d.get("swap", 0.0)
+            for d in deals
+        )
+        
+        self.daily_realized_pnl = total_net_pnl
+        self.daily_trade_count = len(deals)
+        self.daily_wins = sum(1 for d in deals if d.get("profit", 0.0) >= 0)
+        self.daily_losses = sum(1 for d in deals if d.get("profit", 0.0) < 0)
         self._save_state()
 
     # ===================================================================
@@ -259,9 +279,9 @@ class RiskManager:
     # ===================================================================
 
     def _get_floating_pnl(self) -> float:
-        """Sum of unrealized P/L from all open positions."""
+        """Sum of unrealized P/L including commission and swap."""
         positions = mt5_bridge.get_open_positions()
-        return sum(p.profit for p in positions)
+        return sum(p.profit + p.commission + p.swap for p in positions)
 
     def _stop_day(self, reason: str):
         """Mark the bot as stopped for the rest of the day."""

@@ -67,6 +67,8 @@ class Position:
     sl: float
     tp: float
     profit: float
+    commission: float
+    swap: float
     time: datetime
 
 
@@ -336,6 +338,8 @@ def get_open_positions() -> list[Position]:
             sl=p.sl,
             tp=p.tp,
             profit=p.profit,
+            commission=p.commission,
+            swap=p.swap,
             time=datetime.fromtimestamp(p.time),
         )
         for p in positions
