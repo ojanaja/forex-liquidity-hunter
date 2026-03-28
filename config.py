@@ -131,9 +131,7 @@ TIMEZONE = "Asia/Jakarta"  # UTC+7
 # TRADING PAIRS (Multi-Asset Global Selection)
 # =============================================================================
 SYMBOLS = [
-    "EURUSDx", "GBPUSDx", "USDJPYx", "EURJPYx", "GBPJPYx", "XAUUSDx",
-    "AUDUSDx", "NZDUSDx", "USDCHFx", "EURGBPx", "EURAUDx",
-    "AUDJPYx"
+    "EURAUDx", "EURGBPx", "GBPUSDx", "GBPJPYx", "AUDUSDx", "XAUUSDx",
 ]
 
 # =============================================================================
