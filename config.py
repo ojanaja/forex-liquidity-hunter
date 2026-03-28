@@ -79,6 +79,15 @@ RSI_OS     = 25  # Oversold   (tighter = fewer but better signals)
 # --- Breakout Parameters ---
 BREAKOUT_CONFIRMATION_CANDLES = 2
 
+# --- Elliott Wave Parameters ---
+ENABLE_ELLIOTT_WAVE     = True
+EW_ZIGZAG_DEPTH         = 8        # Min bars between swings
+EW_MIN_WAVE1_PIPS       = 10.0     # Min Wave 1 size in pips
+EW_WAVE2_RETRACE_MIN    = 0.382    # Min Fibonacci retracement (38.2%)
+EW_WAVE2_RETRACE_MAX    = 0.786    # Max Fibonacci retracement (78.6%)
+EW_LOOKBACK_BARS        = 120      # M15 bars to analyze (120 × 15min = 30h)
+EW_MAX_SL_PIPS          = 50.0     # Max SL for EW trades
+
 # --- Minimum Risk Reward (Req #7) ---
 MIN_RISK_REWARD_RATIO = 2.0       # Minimum 1:2 RR required
 

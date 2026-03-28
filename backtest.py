@@ -31,6 +31,7 @@ except ImportError:
     MT5_AVAILABLE = False
 
 import config
+from elliott_wave import detect_elliott_bt
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -709,6 +710,14 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                         signal = rsi_result
                     elif rsi_result["type"] == "SELL" and htf_trend == "DOWNTREND" and rr >= config.MIN_RISK_REWARD_RATIO:
                         signal = rsi_result
+
+            # ══════════════════════════════════════════════════
+            # STRATEGY D: Elliott Wave (Wave 3 Entry)
+            # ══════════════════════════════════════════════════
+            if signal is None and getattr(config, "ENABLE_ELLIOTT_WAVE", False):
+                ew_result = detect_elliott_bt(df_m15_all, ts, htf_trend, pip_size)
+                if ew_result:
+                    signal = ew_result
 
             # ══════════════════════════════════════════════════
             # FINAL VALIDATION: LTF Confirmations
