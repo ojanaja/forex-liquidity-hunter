@@ -68,7 +68,7 @@ RANGE_TIMEFRAME_MINUTES = 15       # Session range identification
 SWEEP_THRESHOLD_PIPS    = 2.0      # Ignore micro-sweeps (too noisy at 0.5)
 FVG_MIN_SIZE_PIPS       = 1.0      # Real institutional FVG needs > 1.0 pip
 SL_BUFFER_PIPS          = 3.0      # Extra SL room to avoid stop hunts
-TP_RATIO                = 2.0      # Updated to 1:2 minimum RR (Req #7)
+TP_RATIO                = 3.0      # 1:3 RR — gives room for TP2 checkpoint (2.5R < 3.0R)
 USE_FVG_50_ENTRY        = True     # 50% Consequent Encroachment
 
 # --- RSI Parameters ---
@@ -96,7 +96,7 @@ MIN_RISK_REWARD_RATIO = 2.0       # Minimum 1:2 RR required
 # =============================================================================
 ENABLE_CHECKPOINT_TP        = True
 TP_CHECKPOINTS              = [1.5, 2.5, 3.5]    # Higher checkpoints = bigger partial wins
-TP_PARTIAL_CLOSE_PCTS       = [0.30, 0.30, 0.00]  # Less closed early = more rides to TP2+
+TP_PARTIAL_CLOSE_PCTS       = [0.80, 0.10, 0.00]  # TP1: 80%, TP2: 10%, TP3: keep 10% trailing
 ENABLE_TRAILING_AFTER_FINAL = True                 # Trail SL after last checkpoint
 TRAILING_STEP_PIPS          = 10.0                 # Trail SL step size in pips
 TRAILING_ACTIVATION_R       = 3.0                  # Start trailing after this R level
@@ -132,8 +132,8 @@ TIMEZONE = "Asia/Jakarta"  # UTC+7
 # =============================================================================
 SYMBOLS = [
     "EURUSDx", "GBPUSDx", "USDJPYx", "EURJPYx", "GBPJPYx", "XAUUSDx",
-    "AUDUSDx", "NZDUSDx", "USDCADx", "USDCHFx", "EURGBPx", "EURAUDx",
-    "AUDJPYx", "CADJPYx"
+    "AUDUSDx", "NZDUSDx", "USDCHFx", "EURGBPx", "EURAUDx",
+    "AUDJPYx"
 ]
 
 # =============================================================================

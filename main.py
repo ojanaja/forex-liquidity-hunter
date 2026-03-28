@@ -412,15 +412,15 @@ def _manage_checkpoints(open_positions):
 
                 # --- Move SL ---
                 if i == 0:
-                    # TP1: SL to Breakeven + commission/spread
-                    be_buffer = _calc_be_buffer(sym_info, p.volume, pip_size)
+                    # TP1: SL to entry + 0.5R (locks in real profit, not just BE)
+                    sl_lock = state["risk_distance"] * 0.5
                     if direction == "BUY":
-                        new_sl = state["entry_price"] + be_buffer
+                        new_sl = state["entry_price"] + sl_lock
                     else:
-                        new_sl = state["entry_price"] - be_buffer
+                        new_sl = state["entry_price"] - sl_lock
                     mt5_bridge.modify_position_sl(p.ticket, new_sl)
                     logger.info(
-                        f"[CHECKPOINT] {cp_name}: SL -> BE+buffer ({new_sl:.5f})"
+                        f"[CHECKPOINT] {cp_name}: SL -> entry+0.5R ({new_sl:.5f})"
                     )
                 else:
                     # TP2+: SL to previous checkpoint level

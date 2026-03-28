@@ -404,12 +404,12 @@ def process_checkpoints(trade: BacktestTrade, high: float, low: float, pip_size:
 
             # Move SL
             if i == 0:
-                # SL to BE + buffer
-                be_buffer = SPREAD_COST_PIPS * pip_size
+                # SL to entry + 0.5R (locks in profit, not just breakeven)
+                sl_lock = trade.risk_distance * 0.5
                 if trade.trade_type == "BUY":
-                    trade.sl = max(trade.sl, trade.entry + be_buffer)
+                    trade.sl = max(trade.sl, trade.entry + sl_lock)
                 else:
-                    trade.sl = min(trade.sl, trade.entry - be_buffer)
+                    trade.sl = min(trade.sl, trade.entry - sl_lock)
             else:
                 # SL to previous checkpoint
                 prev_r = checkpoints[i - 1]
