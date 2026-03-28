@@ -76,6 +76,9 @@ class ClosedTrade:
     strategy: str
     gross_pnl: float
     net_pnl: float
+    entry_price: float = 0.0
+    exit_price: float = 0.0
+    exit_type: str = ""       # SL, TP, PARTIAL, TRAIL, EOD
     partial_exits: list = field(default_factory=list)
 
 
@@ -523,6 +526,8 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                         time=ts, symbol=symbol, trade_type=trade.trade_type,
                         strategy=trade.strategy,
                         gross_pnl=pr["pnl"], net_pnl=pr["pnl"],
+                        entry_price=trade.entry, exit_price=0.0,
+                        exit_type=f"PARTIAL-{pr['checkpoint']}",
                         partial_exits=[pr["checkpoint"]],
                     ))
 
@@ -552,10 +557,17 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                     spread_cost = SPREAD_COST_PIPS * pip_size * trade.remaining_volume_pct
                     net_pnl = gross_pnl - commission - spread_cost
 
+                    exit_reason = "TP" if ((trade.trade_type == "BUY" and exit_price >= trade.tp and trade.tp > 0) or
+                                          (trade.trade_type == "SELL" and exit_price <= trade.tp and trade.tp > 0)) else "SL"
+                    if trade.trailing_active and exit_reason == "SL":
+                        exit_reason = "TRAIL"
+
                     all_closed_trades.append(ClosedTrade(
                         time=ts, symbol=symbol, trade_type=trade.trade_type,
                         strategy=trade.strategy,
                         gross_pnl=gross_pnl, net_pnl=net_pnl,
+                        entry_price=trade.entry, exit_price=exit_price,
+                        exit_type=exit_reason,
                     ))
                     trades_to_close.append(trade)
                     symbol_cooldown = ts + timedelta(minutes=config.TRADE_COOLDOWN_MINUTES)
@@ -777,6 +789,8 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                     time=df_m5_all.index[-1], symbol=trade.symbol,
                     trade_type=trade.trade_type, strategy=trade.strategy,
                     gross_pnl=gross, net_pnl=net,
+                    entry_price=trade.entry, exit_price=exit_p,
+                    exit_type="EOD",
                 ))
 
     return all_closed_trades
@@ -1016,6 +1030,25 @@ def generate_advanced_report(all_trades, test_months, report_path):
         label = f"Trade {i}" if i > 0 else "Start"
         out(f"  {label:<12} ${val:>10,.2f}  {bar}")
     out(f"  {'End':<12} ${equity_curve[-1]:>10,.2f}")
+
+    # Trade History
+    out("\n  9. TRADE HISTORY")
+    out("  " + "-" * 120)
+    out(f"  {'#':>4} | {'Date':^19} | {'Symbol':^10} | {'Dir':^4} | {'Strategy':^8} | {'Entry':>10} | {'Exit':>10} | {'Type':^8} | {'Net P/L':>10} | {'Balance':>11}")
+    out("  " + "-" * 120)
+    running_balance = ACCOUNT_BALANCE
+    for i, t in enumerate(all_trades):
+        running_balance += t.net_pnl
+        t_time = t.time
+        if hasattr(t_time, 'strftime'):
+            t_str = t_time.strftime('%Y-%m-%d %H:%M')
+        else:
+            t_str = str(t_time)[:19]
+        entry_str = f"{t.entry_price:.5f}" if t.entry_price else "-"
+        exit_str = f"{t.exit_price:.5f}" if t.exit_price else "-"
+        pnl_sign = "+" if t.net_pnl >= 0 else ""
+        out(f"  {i+1:>4} | {t_str:^19} | {t.symbol:^10} | {t.trade_type:^4} | {t.strategy:^8} | {entry_str:>10} | {exit_str:>10} | {t.exit_type:^8} | ${pnl_sign}{t.net_pnl:>8.2f} | ${running_balance:>10,.2f}")
+    out("  " + "-" * 120)
 
     # Verdict
     out("\n  " + "=" * 50)
