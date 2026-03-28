@@ -18,10 +18,10 @@ MT5_PATH = os.getenv("MT5_PATH", None)  # Optional: path to terminal64.exe
 # =============================================================================
 # ACCOUNT RULES
 # =============================================================================
-ACCOUNT_BALANCE         = 10000.0  # Default evaluation balance
-MAX_RISK_PER_TRADE_PCT  = 1.0      # 1-2% risk per trade (Req #7)
-DAILY_LOSS_LIMIT        = 150.0    # Stop trading if down $150 in a day
-TOTAL_LOSS_LIMIT        = 350.0    # Stop trading if down $350 total
+ACCOUNT_BALANCE         = 9843.0   # Actual current balance
+MAX_RISK_PER_TRADE_PCT  = 0.5      # 0.5% risk (only $49/trade — protect $243 buffer)
+DAILY_LOSS_LIMIT        = 100.0    # Stop if down $100 in a day
+TOTAL_LOSS_LIMIT        = 200.0    # Hard stop at $9,643 (safe above $9,600)
 PROFIT_TARGET           = 600.0    # 6% monthly target
 DAILY_PROFIT_CAP        = 200.0    # Consistency rule enforcement
 
@@ -146,7 +146,7 @@ SYMBOLS = [
 # =============================================================================
 # SAFETY / EXECUTION
 # =============================================================================
-DRY_RUN = False                    # True = log only, False = real trades
+DRY_RUN = True                     # SAFETY: validate strategy before risking real $
 MAX_SPREAD_PIPS = 80.0             # Max allowed spread (80.0 for Gold)
 TRADE_COOLDOWN_MINUTES = 30        # Prevent rapid re-entry on same symbol
 SCAN_INTERVAL_SECONDS = 10         # How often to check for signals
