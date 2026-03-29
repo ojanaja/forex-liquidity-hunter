@@ -6,6 +6,7 @@ Mirrors the LIVE bot logic as closely as possible:
   - HTF Trend Filter (EMA 50/200 + Market Structure)
   - Sideways Detection (ATR + Bollinger Band Squeeze)
   - LTF Confirmations (RSI, Engulfing, Volume)
+  - News Filter (static schedule blackout simulation)
   - Minimum Risk-Reward Ratio validation
   - Correlation Filter (max 1 per group)
   - Hybrid TP Checkpoint (partial close + trailing SL)
@@ -32,6 +33,8 @@ except ImportError:
 
 import config
 from elliott_wave import detect_elliott_bt
+from news_filter import _generate_static_schedule, _extract_currencies_from_symbol
+import pytz
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -302,6 +305,63 @@ def count_ltf_confirmations(df_m5: pd.DataFrame, ts, direction: str) -> int:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# NEWS FILTER (Static Schedule Simulation for Backtest)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_bt_static_schedule = None
+
+
+def _get_bt_news_schedule():
+    """Lazy-load static news schedule for backtest period."""
+    global _bt_static_schedule
+    if _bt_static_schedule is None:
+        events = []
+        for year in range(2024, 2028):
+            events.extend(_generate_static_schedule(year))
+        _bt_static_schedule = events
+    return _bt_static_schedule
+
+
+def _check_news_blackout_bt(ts, symbol: str) -> bool:
+    """
+    Check if timestamp falls within a news blackout window.
+    Uses static schedule (same fallback as live bot).
+    Returns True if entry should be BLOCKED.
+    """
+    if not getattr(config, "ENABLE_NEWS_FILTER", False):
+        return False
+
+    events = _get_bt_news_schedule()
+    symbol_currencies = _extract_currencies_from_symbol(symbol)
+
+    before_min = getattr(config, "NEWS_BLACKOUT_MINUTES_BEFORE", 15)
+    after_min = getattr(config, "NEWS_BLACKOUT_MINUTES_AFTER", 10)
+
+    # Make ts timezone-aware
+    if hasattr(ts, 'tzinfo') and ts.tzinfo is not None:
+        ts_utc = ts
+    else:
+        ts_utc = pytz.UTC.localize(ts) if not isinstance(ts, pd.Timestamp) else ts.tz_localize(pytz.UTC)
+
+    for event in events:
+        event_currency = event.get("currency", "")
+        if event_currency not in symbol_currencies:
+            continue
+
+        event_time = event["time"]
+        if event_time.tzinfo is None:
+            event_time = pytz.UTC.localize(event_time)
+
+        diff_min = (event_time - ts_utc).total_seconds() / 60
+
+        # In blackout window: -after_min <= diff <= before_min
+        if -after_min <= diff_min <= before_min:
+            return True
+
+    return False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # CORRELATION FILTER
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -469,7 +529,7 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
     dx = diagnostics
     for key in ["candles", "in_session", "htf_sideways", "mkt_sideways",
                 "corr_block", "no_signal", "rr_fail", "confirm_fail",
-                "trades_opened", "concurrent_block"]:
+                "trades_opened", "concurrent_block", "news_blackout"]:
         dx.setdefault(key, 0)
 
     for symbol, (df_m5_all, df_h1_all, df_m15_all) in symbol_data_cache.items():
@@ -608,6 +668,11 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
             # ══════════════════════════════════════════════════
             # VALIDATION GATE (mirrors market_filter.validate_entry)
             # ══════════════════════════════════════════════════
+
+            # 0. News Blackout
+            if _check_news_blackout_bt(ts, symbol):
+                dx["news_blackout"] += 1
+                continue
 
             # 1. HTF Trend
             htf_trend = compute_htf_trend(df_h1, ts)
@@ -1127,6 +1192,7 @@ def run_backtest():
     print(f"  Risk/Trade:      {config.MAX_RISK_PER_TRADE_PCT}%")
     print(f"  Min RR:          1:{config.MIN_RISK_REWARD_RATIO}")
     print(f"  Confirmations:   >= {config.MIN_CONFIRMATIONS}")
+    print(f"  News Filter:     {'ON' if getattr(config, 'ENABLE_NEWS_FILTER', False) else 'OFF'}")
     print(f"  Checkpoint TP:   {'ON' if getattr(config, 'ENABLE_CHECKPOINT_TP', False) else 'OFF'}")
     print(f"  Max Open Trades: {config.MAX_OPEN_TRADES}")
     print(f"  Symbols:         {len(config.SYMBOLS)}")
@@ -1214,6 +1280,7 @@ def run_backtest():
     print("  " + "-" * 50)
     print(f"  Candles processed:   {diagnostics.get('candles', 0):>8}")
     print(f"  In session window:   {diagnostics.get('in_session', 0):>8}")
+    print(f"  News blackout:       {diagnostics.get('news_blackout', 0):>8}  (blocked)")
     print(f"  HTF = SIDEWAYS:      {diagnostics.get('htf_sideways', 0):>8}  (blocked)")
     print(f"  Market sideways:     {diagnostics.get('mkt_sideways', 0):>8}  (blocked)")
     print(f"  Correlation block:   {diagnostics.get('corr_block', 0):>8}  (blocked)")

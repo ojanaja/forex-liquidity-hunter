@@ -144,6 +144,18 @@ SYMBOLS = [
 ]
 
 # =============================================================================
+# NEWS FILTER (Avoid entry near high-impact economic news)
+# =============================================================================
+ENABLE_NEWS_FILTER              = True
+NEWS_BLACKOUT_MINUTES_BEFORE    = 15      # Block entry X minutes before news
+NEWS_BLACKOUT_MINUTES_AFTER     = 10      # Block entry X minutes after news
+NEWS_MIN_IMPORTANCE             = "HIGH"  # "HIGH", "MODERATE", or "LOW"
+NEWS_CACHE_MINUTES              = 30      # How often to re-fetch calendar
+NEWS_AFFECTED_CURRENCIES        = [       # Currencies we care about
+    "USD", "EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF", "XAU",
+]
+
+# =============================================================================
 # SAFETY / EXECUTION
 # =============================================================================
 DRY_RUN = True                     # SAFETY: validate strategy before risking real $

@@ -334,7 +334,8 @@ def validate_entry(
     """
     Master validation function — ALL checks must pass.
 
-    6-Point Logic Gate:
+    7-Point Logic Gate:
+    0. Is it safe from news? (News Blackout filter)
     1. Is trend clear? (HTF not SIDEWAYS)
     2. Is entry aligned with trend? (direction matches HTF trend)
     3. Are there strong confirmations? (LTF >= MIN_CONFIRMATIONS)
@@ -346,6 +347,13 @@ def validate_entry(
         (True, "OK") if all pass
         (False, reason) if any fail
     """
+    # --- Check 0 (NEW): News Blackout ---
+    if getattr(config, "ENABLE_NEWS_FILTER", False):
+        from news_filter import news_filter as _news_filter
+        is_blackout, news_reason = _news_filter.is_news_blackout(symbol)
+        if is_blackout:
+            return False, f"News blackout: {news_reason}"
+
     # --- Check 1: Trend clarity ---
     htf_trend = get_htf_trend(symbol)
     if htf_trend is None:
