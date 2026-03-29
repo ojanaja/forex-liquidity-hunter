@@ -1,14 +1,11 @@
 """
-Forex Liquidity Hunter - Backtester V18+ (Realistic Simulation)
-================================================================
+Forex Liquidity Hunter - Backtester V18 (Realistic Simulation)
+===============================================================
 Mirrors the LIVE bot logic as closely as possible:
-  - All 3 strategy engines (SMC Sweep+OB, Breakout, RSI Scalp)
-  - Elliott Wave strategy (Wave 3 Entry)
+  - All 3 strategy engines (SMC Sweep, Breakout, RSI Scalp)
   - HTF Trend Filter (EMA 50/200 + Market Structure)
   - Sideways Detection (ATR + Bollinger Band Squeeze)
-  - LTF Confirmations (RSI, Engulfing, Volume, RSI Divergence, MACD Cross)
-  - News Filter (static schedule blackout simulation)
-  - Order Block Detection (FVG fallback)
+  - LTF Confirmations (RSI, Engulfing, Volume)
   - Minimum Risk-Reward Ratio validation
   - Correlation Filter (max 1 per group)
   - Hybrid TP Checkpoint (partial close + trailing SL)
@@ -35,8 +32,6 @@ except ImportError:
 
 import config
 from elliott_wave import detect_elliott_bt
-from news_filter import _generate_static_schedule, _extract_currencies_from_symbol
-import pytz
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -246,164 +241,27 @@ def check_sideways(df_h1: pd.DataFrame, ts) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# NEWS FILTER (Static Schedule Simulation)
+# LTF CONFIRMATIONS (RSI, Engulfing, Volume)
 # ══════════════════════════════════════════════════════════════════════════════
-
-_bt_static_schedule = None
-
-def _get_bt_news_schedule():
-    """Lazy-load static news schedule for backtest period."""
-    global _bt_static_schedule
-    if _bt_static_schedule is None:
-        events = []
-        for year in range(2024, 2028):  # Cover a wide range
-            events.extend(_generate_static_schedule(year))
-        _bt_static_schedule = events
-    return _bt_static_schedule
-
-
-def check_news_blackout(ts, symbol: str) -> bool:
-    """
-    Check if a timestamp falls within a news blackout window.
-    Uses the static schedule (same as live bot fallback).
-    Returns True if entry should be BLOCKED.
-    """
-    if not getattr(config, "ENABLE_NEWS_FILTER", False):
-        return False
-
-    events = _get_bt_news_schedule()
-    symbol_currencies = _extract_currencies_from_symbol(symbol)
-
-    before_min = getattr(config, "NEWS_BLACKOUT_MINUTES_BEFORE", 15)
-    after_min = getattr(config, "NEWS_BLACKOUT_MINUTES_AFTER", 10)
-
-    # Make ts timezone-aware for comparison
-    if hasattr(ts, 'tzinfo') and ts.tzinfo is not None:
-        ts_utc = ts
-    else:
-        ts_utc = pytz.UTC.localize(ts) if not isinstance(ts, pd.Timestamp) else ts.tz_localize(pytz.UTC)
-
-    for event in events:
-        event_currency = event.get("currency", "")
-        if event_currency not in symbol_currencies:
-            continue
-
-        event_time = event["time"]
-        if event_time.tzinfo is None:
-            event_time = pytz.UTC.localize(event_time)
-
-        diff_min = (event_time - ts_utc).total_seconds() / 60
-
-        # In blackout window: -after_min <= diff <= before_min
-        if -after_min <= diff_min <= before_min:
-            return True
-
-    return False
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# LTF CONFIRMATIONS (RSI, Engulfing, Volume, RSI Divergence, MACD Cross)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _compute_rsi_series_bt(closes: pd.Series, period: int) -> pd.Series:
-    """Compute RSI as a full series."""
-    delta = closes.diff()
-    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-
-def _detect_rsi_divergence_bt(df_slice: pd.DataFrame, rsi: pd.Series, direction: str) -> bool:
-    """Detect RSI divergence — mirrors market_filter._detect_rsi_divergence()"""
-    lookback = getattr(config, "RSI_DIVERGENCE_LOOKBACK", 10)
-    if len(df_slice) < lookback or len(rsi) < lookback:
-        return False
-
-    prices_low = df_slice["low"].iloc[-lookback:].values
-    prices_high = df_slice["high"].iloc[-lookback:].values
-    rsi_vals = rsi.iloc[-lookback:].values
-    valid_mask = ~np.isnan(rsi_vals)
-    if valid_mask.sum() < 5:
-        return False
-
-    if direction == "BUY":
-        swing_lows = []
-        for i in range(1, len(prices_low) - 1):
-            if valid_mask[i] and prices_low[i] < prices_low[i-1] and prices_low[i] < prices_low[i+1]:
-                swing_lows.append(i)
-        if len(swing_lows) < 2:
-            return False
-        idx1, idx2 = swing_lows[-2], swing_lows[-1]
-        return prices_low[idx2] < prices_low[idx1] and rsi_vals[idx2] > rsi_vals[idx1]
-
-    elif direction == "SELL":
-        swing_highs = []
-        for i in range(1, len(prices_high) - 1):
-            if valid_mask[i] and prices_high[i] > prices_high[i-1] and prices_high[i] > prices_high[i+1]:
-                swing_highs.append(i)
-        if len(swing_highs) < 2:
-            return False
-        idx1, idx2 = swing_highs[-2], swing_highs[-1]
-        return prices_high[idx2] > prices_high[idx1] and rsi_vals[idx2] < rsi_vals[idx1]
-
-    return False
-
-
-def _detect_macd_cross_bt(df_slice: pd.DataFrame, direction: str) -> bool:
-    """Detect MACD crossover — mirrors market_filter._detect_macd_cross()"""
-    if len(df_slice) < 30:
-        return False
-
-    fast = getattr(config, "MACD_FAST_PERIOD", 12)
-    slow = getattr(config, "MACD_SLOW_PERIOD", 26)
-    signal_period = getattr(config, "MACD_SIGNAL_PERIOD", 9)
-
-    ema_fast = df_slice["close"].ewm(span=fast, adjust=False).mean()
-    ema_slow = df_slice["close"].ewm(span=slow, adjust=False).mean()
-    macd_line = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
-    histogram = macd_line - signal_line
-
-    curr_macd, prev_macd = macd_line.iloc[-1], macd_line.iloc[-2]
-    curr_signal, prev_signal = signal_line.iloc[-1], signal_line.iloc[-2]
-    curr_hist, prev_hist = histogram.iloc[-1], histogram.iloc[-2]
-
-    if pd.isna(curr_macd) or pd.isna(prev_macd) or pd.isna(curr_signal):
-        return False
-
-    if direction == "BUY":
-        crossover = prev_macd <= prev_signal and curr_macd > curr_signal
-        momentum_shift = prev_hist < 0 and curr_hist > 0
-        return crossover or momentum_shift
-    elif direction == "SELL":
-        crossover = prev_macd >= prev_signal and curr_macd < curr_signal
-        momentum_shift = prev_hist > 0 and curr_hist < 0
-        return crossover or momentum_shift
-    return False
-
 
 def count_ltf_confirmations(df_m5: pd.DataFrame, ts, direction: str) -> int:
-    """
-    Mirrors market_filter.get_ltf_confirmations() — 6-point system.
-
-    Checks:
-    1. RSI not in opposing extreme zone
-    2. Engulfing candle pattern
-    3. Rejection / pin bar
-    4. Volume spike
-    5. RSI Divergence
-    6. MACD Cross
-    """
-    m5_slice = df_m5.loc[:ts].tail(50)  # 50 bars for MACD
-    if len(m5_slice) < 30:
+    """Mirrors market_filter.get_ltf_confirmations()"""
+    m5_slice = df_m5.loc[:ts].tail(30)
+    if len(m5_slice) < 20:
         return 0
 
     confirmations = 0
 
     # 1. RSI
-    rsi_series = _compute_rsi_series_bt(m5_slice["close"], config.RSI_PERIOD)
-    rsi = rsi_series.iloc[-1] if not pd.isna(rsi_series.iloc[-1]) else 50.0
+    delta = m5_slice["close"].diff()
+    gain = delta.where(delta > 0, 0).rolling(window=config.RSI_PERIOD).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=config.RSI_PERIOD).mean()
+
+    if loss.iloc[-1] != 0:
+        rs = gain.iloc[-1] / loss.iloc[-1]
+        rsi = 100 - (100 / (1 + rs))
+    else:
+        rsi = 100.0
 
     if direction == "BUY" and rsi < config.RSI_OB:
         confirmations += 1
@@ -439,14 +297,6 @@ def count_ltf_confirmations(df_m5: pd.DataFrame, ts, direction: str) -> int:
         avg_vol = m5_slice["tick_volume"].iloc[-20:-1].mean()
         if avg_vol > 0 and m5_slice["tick_volume"].iloc[-1] > avg_vol * 1.5:
             confirmations += 1
-
-    # 5. RSI Divergence
-    if _detect_rsi_divergence_bt(m5_slice, rsi_series, direction):
-        confirmations += 1
-
-    # 6. MACD Cross
-    if _detect_macd_cross_bt(m5_slice, direction):
-        confirmations += 1
 
     return confirmations
 
@@ -619,8 +469,7 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
     dx = diagnostics
     for key in ["candles", "in_session", "htf_sideways", "mkt_sideways",
                 "corr_block", "no_signal", "rr_fail", "confirm_fail",
-                "trades_opened", "concurrent_block", "news_blackout",
-                "ob_entries", "fvg_entries"]:
+                "trades_opened", "concurrent_block"]:
         dx.setdefault(key, 0)
 
     for symbol, (df_m5_all, df_h1_all, df_m15_all) in symbol_data_cache.items():
@@ -758,13 +607,7 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
 
             # ══════════════════════════════════════════════════
             # VALIDATION GATE (mirrors market_filter.validate_entry)
-            # 7-Point: News → HTF → Sideways → Corr → Signal → RR → LTF
             # ══════════════════════════════════════════════════
-
-            # 0. News Blackout
-            if check_news_blackout(ts, symbol):
-                dx["news_blackout"] += 1
-                continue
 
             # 1. HTF Trend
             htf_trend = compute_htf_trend(df_h1, ts)
@@ -783,12 +626,9 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                 continue
 
             # ══════════════════════════════════════════════════
-            # STRATEGY A: SMC Sweep (FVG + Order Block)
+            # STRATEGY A: SMC Sweep
             # ══════════════════════════════════════════════════
             signal = None
-            ob_lookback = getattr(config, "OB_LOOKBACK_CANDLES", 20)
-            ob_min_body = getattr(config, "OB_MIN_BODY_RATIO", 0.5)
-            ob_prox = getattr(config, "OB_PROXIMITY_PIPS", 5.0) * pip_size
 
             if getattr(config, "ENABLE_SMC_SWEEP", True):
                 # Detect sweep
@@ -803,9 +643,8 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                     last_sweep_type = None
 
                 if last_sweep_type:
-                    # --- Try FVG first ---
+                    # FVG detection
                     cl = list(fvg_buf)
-                    fvg_found = False
                     for i in range(len(cl) - 1, 1, -1):
                         newer, older = cl[i], cl[i - 2]
 
@@ -814,15 +653,13 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                                 te = (older["low"] + newer["high"]) / 2 if config.USE_FVG_50_ENTRY else newer["high"]
                                 sl = max(can["high"] for can in cl[-12:]) + sl_buff
                                 sl_p = (sl - te) / pip_size
-                                rr = config.TP_RATIO
+                                rr = config.TP_RATIO  # TP = entry - risk * TP_RATIO, so RR = TP_RATIO
                                 if 3.0 <= sl_p <= max_sl_p and rr >= config.MIN_RISK_REWARD_RATIO:
                                     signal = {
                                         "type": "SELL", "entry": te, "sl": sl,
                                         "tp": te - (sl - te) * config.TP_RATIO,
                                         "strategy": "SMC",
                                     }
-                                    dx["fvg_entries"] += 1
-                                    fvg_found = True
                                     break
 
                         elif last_sweep_type == "LOW" and htf_trend == "UPTREND":
@@ -830,68 +667,14 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                                 te = (newer["low"] + older["high"]) / 2 if config.USE_FVG_50_ENTRY else newer["low"]
                                 sl = min(can["low"] for can in cl[-12:]) - sl_buff
                                 sl_p = (te - sl) / pip_size
-                                rr = config.TP_RATIO
+                                rr = config.TP_RATIO  # TP = entry + risk * TP_RATIO, so RR = TP_RATIO
                                 if 3.0 <= sl_p <= max_sl_p and rr >= config.MIN_RISK_REWARD_RATIO:
                                     signal = {
                                         "type": "BUY", "entry": te, "sl": sl,
                                         "tp": te + (te - sl) * config.TP_RATIO,
                                         "strategy": "SMC",
                                     }
-                                    dx["fvg_entries"] += 1
-                                    fvg_found = True
                                     break
-
-                    # --- Order Block fallback (if no FVG found) ---
-                    if not fvg_found and getattr(config, "ENABLE_ORDER_BLOCK", True):
-                        ob_candles = cl[-min(ob_lookback, len(cl)):]
-
-                        for i in range(len(ob_candles) - 2, 0, -1):
-                            candle_ob = ob_candles[i]
-                            ob_body = candle_ob["close"] - candle_ob["open"]
-                            ob_range = candle_ob["high"] - candle_ob["low"]
-                            if ob_range <= 0:
-                                continue
-                            ob_ratio = abs(ob_body) / ob_range
-
-                            if last_sweep_type == "HIGH" and htf_trend == "DOWNTREND":
-                                # Bearish OB: bullish candle + bearish follow-through
-                                if ob_body > 0 and ob_ratio >= ob_min_body:
-                                    if i + 1 < len(ob_candles):
-                                        nxt = ob_candles[i + 1]
-                                        if nxt["close"] - nxt["open"] < 0:  # bearish
-                                            ob_top = candle_ob["close"]
-                                            ob_bottom = candle_ob["open"]
-                                            if ob_bottom - ob_prox <= c <= ob_top + ob_prox:
-                                                sl = max(can["high"] for can in cl[-12:]) + sl_buff
-                                                sl_p = (sl - c) / pip_size
-                                                if 3.0 <= sl_p <= max_sl_p:
-                                                    signal = {
-                                                        "type": "SELL", "entry": c, "sl": sl,
-                                                        "tp": c - (sl - c) * config.TP_RATIO,
-                                                        "strategy": "SMC",
-                                                    }
-                                                    dx["ob_entries"] += 1
-                                                    break
-
-                            elif last_sweep_type == "LOW" and htf_trend == "UPTREND":
-                                # Bullish OB: bearish candle + bullish follow-through
-                                if ob_body < 0 and ob_ratio >= ob_min_body:
-                                    if i + 1 < len(ob_candles):
-                                        nxt = ob_candles[i + 1]
-                                        if nxt["close"] - nxt["open"] > 0:  # bullish
-                                            ob_top = candle_ob["open"]
-                                            ob_bottom = candle_ob["close"]
-                                            if ob_bottom - ob_prox <= c <= ob_top + ob_prox:
-                                                sl = min(can["low"] for can in cl[-12:]) - sl_buff
-                                                sl_p = (c - sl) / pip_size
-                                                if 3.0 <= sl_p <= max_sl_p:
-                                                    signal = {
-                                                        "type": "BUY", "entry": c, "sl": sl,
-                                                        "tp": c + (c - sl) * config.TP_RATIO,
-                                                        "strategy": "SMC",
-                                                    }
-                                                    dx["ob_entries"] += 1
-                                                    break
 
             # ══════════════════════════════════════════════════
             # STRATEGY B: Breakout
@@ -1338,14 +1121,12 @@ def run_backtest():
     DAYS_BACK = 90
     print()
     print("=" * 70)
-    print("  FOREX LIQUIDITY HUNTER V18+ - ADVANCED BACKTEST ENGINE")
+    print("  FOREX LIQUIDITY HUNTER V18 - REALISTIC BACKTEST ENGINE")
     print("=" * 70)
     print(f"  Period:          Last {DAYS_BACK} days")
     print(f"  Risk/Trade:      {config.MAX_RISK_PER_TRADE_PCT}%")
     print(f"  Min RR:          1:{config.MIN_RISK_REWARD_RATIO}")
-    print(f"  Confirmations:   >= {config.MIN_CONFIRMATIONS} of 6")
-    print(f"  News Filter:     {'ON' if getattr(config, 'ENABLE_NEWS_FILTER', False) else 'OFF'}")
-    print(f"  Order Block:     {'ON' if getattr(config, 'ENABLE_ORDER_BLOCK', False) else 'OFF'}")
+    print(f"  Confirmations:   >= {config.MIN_CONFIRMATIONS}")
     print(f"  Checkpoint TP:   {'ON' if getattr(config, 'ENABLE_CHECKPOINT_TP', False) else 'OFF'}")
     print(f"  Max Open Trades: {config.MAX_OPEN_TRADES}")
     print(f"  Symbols:         {len(config.SYMBOLS)}")
@@ -1430,19 +1211,16 @@ def run_backtest():
 
     # Diagnostic Summary
     print(f"\n  DIAGNOSTIC: Filter Rejection Breakdown")
-    print("  " + "-" * 55)
-    print(f"  Candles processed:     {diagnostics.get('candles', 0):>8}")
-    print(f"  In session window:     {diagnostics.get('in_session', 0):>8}")
-    print(f"  News blackout:         {diagnostics.get('news_blackout', 0):>8}  (blocked)")
-    print(f"  HTF = SIDEWAYS:        {diagnostics.get('htf_sideways', 0):>8}  (blocked)")
-    print(f"  Market sideways:       {diagnostics.get('mkt_sideways', 0):>8}  (blocked)")
-    print(f"  Correlation block:     {diagnostics.get('corr_block', 0):>8}  (blocked)")
-    print(f"  Concurrent block:      {diagnostics.get('concurrent_block', 0):>8}  (blocked)")
-    print(f"  No signal generated:   {diagnostics.get('no_signal', 0):>8}")
-    print(f"  Confirm fail (<{config.MIN_CONFIRMATIONS}/6): {diagnostics.get('confirm_fail', 0):>8}  (blocked)")
-    print(f"  Trades opened:         {diagnostics.get('trades_opened', 0):>8}")
-    print(f"    ├── FVG entries:     {diagnostics.get('fvg_entries', 0):>8}")
-    print(f"    └── OB entries:      {diagnostics.get('ob_entries', 0):>8}")
+    print("  " + "-" * 50)
+    print(f"  Candles processed:   {diagnostics.get('candles', 0):>8}")
+    print(f"  In session window:   {diagnostics.get('in_session', 0):>8}")
+    print(f"  HTF = SIDEWAYS:      {diagnostics.get('htf_sideways', 0):>8}  (blocked)")
+    print(f"  Market sideways:     {diagnostics.get('mkt_sideways', 0):>8}  (blocked)")
+    print(f"  Correlation block:   {diagnostics.get('corr_block', 0):>8}  (blocked)")
+    print(f"  Concurrent block:    {diagnostics.get('concurrent_block', 0):>8}  (blocked)")
+    print(f"  No signal generated: {diagnostics.get('no_signal', 0):>8}")
+    print(f"  Confirm fail (<{config.MIN_CONFIRMATIONS}):  {diagnostics.get('confirm_fail', 0):>8}  (blocked)")
+    print(f"  Trades opened:       {diagnostics.get('trades_opened', 0):>8}")
 
     # Phase 3: Monthly Table
     print(f"\n  PHASE 3: Monthly Breakdown")
