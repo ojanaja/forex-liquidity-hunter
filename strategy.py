@@ -119,7 +119,7 @@ def detect_fvg_entry(symbol: str, sweep_data: dict) -> Optional[dict]:
                 fvg_top, fvg_bottom = c0["low"], c2["high"]
                 target_entry = (fvg_top + fvg_bottom) / 2.0 if getattr(config, "USE_FVG_50_ENTRY", False) else fvg_bottom
                 if target_entry <= current_price["ask"] <= fvg_top + (2 * pip_size):
-                    return {"wick_tip": sweep_data["extreme"], "fvg_entry": current_price["ask"]}
+                    return {"wick_tip": sweep_data["extreme"], "fvg_entry": current_price["ask"], "method": "FVG"}
                     
         elif sweep_data["type"] == "LOW_SWEPT":
             gap = c2["low"] - c0["high"]
@@ -127,7 +127,139 @@ def detect_fvg_entry(symbol: str, sweep_data: dict) -> Optional[dict]:
                 fvg_top, fvg_bottom = c2["low"], c0["high"]
                 target_entry = (fvg_top + fvg_bottom) / 2.0 if getattr(config, "USE_FVG_50_ENTRY", False) else fvg_top
                 if fvg_bottom - (2 * pip_size) <= current_price["bid"] <= target_entry:
-                    return {"wick_tip": sweep_data["extreme"], "fvg_entry": current_price["bid"]}
+                    return {"wick_tip": sweep_data["extreme"], "fvg_entry": current_price["bid"], "method": "FVG"}
+    return None
+
+
+# ======================================================================
+# Step 3b: Order Block Detection (SMC Institutional Footprint)
+# ======================================================================
+
+def detect_order_block_entry(symbol: str, sweep_data: dict) -> Optional[dict]:
+    """
+    Detect Order Block entry after a liquidity sweep.
+
+    An Order Block is the last opposing candle before a strong impulse move.
+    It represents institutional order accumulation and price often returns
+    to this zone before continuing.
+
+    Bearish OB (for SELL after HIGH_SWEPT):
+        The last BULLISH candle before the bearish impulse that swept highs.
+        Entry zone = body of that bullish candle.
+
+    Bullish OB (for BUY after LOW_SWEPT):
+        The last BEARISH candle before the bullish impulse that swept lows.
+        Entry zone = body of that bearish candle.
+    """
+    if not getattr(config, "ENABLE_ORDER_BLOCK", True):
+        return None
+
+    lookback = getattr(config, "OB_LOOKBACK_CANDLES", 20)
+    min_body_ratio = getattr(config, "OB_MIN_BODY_RATIO", 0.5)
+    proximity_pips = getattr(config, "OB_PROXIMITY_PIPS", 5.0)
+
+    df = mt5_bridge.get_ohlc(
+        symbol,
+        timeframe_minutes=config.SCAN_TIMEFRAME_MINUTES,
+        count=lookback + 5,
+    )
+    if df is None or len(df) < 10:
+        return None
+
+    sym_info = mt5_bridge.get_symbol_info(symbol)
+    if sym_info is None:
+        return None
+
+    pip_size = sym_info.point * 10 if sym_info.digits in (3, 5) else sym_info.point
+    proximity = proximity_pips * pip_size
+
+    current_price = mt5_bridge.get_current_price(symbol)
+    if current_price is None:
+        return None
+
+    if sweep_data["type"] == "HIGH_SWEPT":
+        # Looking for bearish OB: last BULLISH candle before the sell-off
+        # Scan backwards from recent candles
+        for i in range(len(df) - 2, max(0, len(df) - lookback), -1):
+            candle = df.iloc[i]
+            body = candle["close"] - candle["open"]
+            total_range = candle["high"] - candle["low"]
+
+            if total_range <= 0:
+                continue
+
+            # Must be a bullish candle with strong body
+            is_bullish = body > 0
+            body_ratio = abs(body) / total_range
+
+            if is_bullish and body_ratio >= min_body_ratio:
+                # Check if the NEXT candle(s) are bearish (impulse down)
+                if i + 1 < len(df):
+                    next_candle = df.iloc[i + 1]
+                    next_body = next_candle["close"] - next_candle["open"]
+
+                    if next_body < 0:  # Bearish follow-through
+                        # OB zone = body of the bullish candle
+                        ob_top = candle["close"]    # Top of bullish body
+                        ob_bottom = candle["open"]  # Bottom of bullish body
+
+                        # Price must be near or inside the OB zone
+                        ask = current_price["ask"]
+                        if ob_bottom - proximity <= ask <= ob_top + proximity:
+                            logger.info(
+                                f"[OB] Bearish Order Block found on {symbol}: "
+                                f"zone {ob_bottom:.5f}-{ob_top:.5f}, "
+                                f"price {ask:.5f}"
+                            )
+                            return {
+                                "wick_tip": sweep_data["extreme"],
+                                "fvg_entry": ask,
+                                "method": "OB",
+                                "ob_top": ob_top,
+                                "ob_bottom": ob_bottom,
+                            }
+
+    elif sweep_data["type"] == "LOW_SWEPT":
+        # Looking for bullish OB: last BEARISH candle before the rally
+        for i in range(len(df) - 2, max(0, len(df) - lookback), -1):
+            candle = df.iloc[i]
+            body = candle["close"] - candle["open"]
+            total_range = candle["high"] - candle["low"]
+
+            if total_range <= 0:
+                continue
+
+            # Must be a bearish candle with strong body
+            is_bearish = body < 0
+            body_ratio = abs(body) / total_range
+
+            if is_bearish and body_ratio >= min_body_ratio:
+                # Check if the NEXT candle(s) are bullish (impulse up)
+                if i + 1 < len(df):
+                    next_candle = df.iloc[i + 1]
+                    next_body = next_candle["close"] - next_candle["open"]
+
+                    if next_body > 0:  # Bullish follow-through
+                        # OB zone = body of the bearish candle
+                        ob_top = candle["open"]     # Top of bearish body
+                        ob_bottom = candle["close"]  # Bottom of bearish body
+
+                        # Price must be near or inside the OB zone
+                        bid = current_price["bid"]
+                        if ob_bottom - proximity <= bid <= ob_top + proximity:
+                            logger.info(
+                                f"[OB] Bullish Order Block found on {symbol}: "
+                                f"zone {ob_bottom:.5f}-{ob_top:.5f}, "
+                                f"price {bid:.5f}"
+                            )
+                            return {
+                                "wick_tip": sweep_data["extreme"],
+                                "fvg_entry": bid,
+                                "method": "OB",
+                                "ob_top": ob_top,
+                                "ob_bottom": ob_bottom,
+                            }
+
     return None
 
 
@@ -204,7 +336,7 @@ def _calc_rr_ratio(entry: float, sl: float, tp: float) -> float:
 def generate_signal(symbol: str, risk_manager=None) -> Optional[Signal]:
     """
     Master signal generator. Runs all strategy engines and validates
-    each signal through the 6-point pre-entry logic gate.
+    each signal through the 7-point pre-entry logic gate.
     """
     sym_info = mt5_bridge.get_symbol_info(symbol)
     if sym_info is None: return None
@@ -221,7 +353,7 @@ def generate_signal(symbol: str, risk_manager=None) -> Optional[Signal]:
     # --- Collect candidate signals from all strategies ---
     candidates = []
 
-    # --- STRATEGY A: SMC Sweep ---
+    # --- STRATEGY A: SMC Sweep (FVG + Order Block) ---
     if getattr(config, "ENABLE_SMC_SWEEP", True):
         sweep = detect_sweep(symbol, range_data["high"], range_data["low"])
         if sweep:
@@ -235,7 +367,11 @@ def generate_signal(symbol: str, risk_manager=None) -> Optional[Signal]:
                     should_proceed = False  # Don't buy in downtrend
 
             if should_proceed:
+                # Try FVG first, then Order Block as fallback
                 entry_data = detect_fvg_entry(symbol, sweep)
+                if entry_data is None:
+                    entry_data = detect_order_block_entry(symbol, sweep)
+
                 if entry_data:
                     direction = "BUY" if sweep["type"] == "LOW_SWEPT" else "SELL"
                     entry = entry_data["fvg_entry"]
@@ -244,10 +380,11 @@ def generate_signal(symbol: str, risk_manager=None) -> Optional[Signal]:
                     tp = entry + sl_dist * config.TP_RATIO if direction == "BUY" else entry - sl_dist * config.TP_RATIO
                     sl_pips = sl_dist / pip_size
                     rr = _calc_rr_ratio(entry, sl, tp)
+                    method = entry_data.get("method", "FVG")
 
                     candidates.append(Signal(
                         symbol, direction, entry, sl, tp,
-                        sl_pips, rr, f"SMC: {sweep['type']} + FVG"
+                        sl_pips, rr, f"SMC: {sweep['type']} + {method}"
                     ))
 
     # --- STRATEGY B: Breakout ---

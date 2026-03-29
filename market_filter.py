@@ -198,7 +198,7 @@ def is_sideways(symbol: str) -> bool:
 
 
 # ======================================================================
-# 3. LTF Entry Confirmations (RSI, Candle Patterns, Volume)
+# 3. LTF Entry Confirmations (RSI, Candle Patterns, Volume, MACD, Divergence)
 # ======================================================================
 
 def _detect_engulfing(df: pd.DataFrame, direction: str) -> bool:
@@ -251,40 +251,182 @@ def _detect_rejection(df: pd.DataFrame, direction: str) -> bool:
     return False
 
 
+def _compute_rsi_series(df: pd.DataFrame, period: int) -> pd.Series:
+    """Compute RSI as a full series (needed for divergence detection)."""
+    delta = df["close"].diff()
+    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+
+def _detect_rsi_divergence(df: pd.DataFrame, rsi: pd.Series, direction: str) -> bool:
+    """
+    Detect RSI divergence — a powerful reversal signal.
+
+    Bullish Divergence (for BUY):
+        Price makes a LOWER LOW, but RSI makes a HIGHER LOW.
+        → Hidden buying pressure, likely reversal up.
+
+    Bearish Divergence (for SELL):
+        Price makes a HIGHER HIGH, but RSI makes a LOWER HIGH.
+        → Hidden selling pressure, likely reversal down.
+    """
+    lookback = getattr(config, "RSI_DIVERGENCE_LOOKBACK", 10)
+
+    if len(df) < lookback or len(rsi) < lookback:
+        return False
+
+    # Get the recent slice for analysis
+    prices_close = df["close"].iloc[-lookback:].values
+    prices_low = df["low"].iloc[-lookback:].values
+    prices_high = df["high"].iloc[-lookback:].values
+    rsi_vals = rsi.iloc[-lookback:].values
+
+    # Drop NaN values from RSI
+    valid_mask = ~np.isnan(rsi_vals)
+    if valid_mask.sum() < 5:
+        return False
+
+    if direction == "BUY":
+        # Find the two most recent swing lows in price
+        # Swing low: a bar where low < both neighbors
+        swing_lows = []
+        for i in range(1, len(prices_low) - 1):
+            if valid_mask[i] and prices_low[i] < prices_low[i - 1] and prices_low[i] < prices_low[i + 1]:
+                swing_lows.append(i)
+
+        if len(swing_lows) < 2:
+            return False
+
+        idx1, idx2 = swing_lows[-2], swing_lows[-1]
+
+        # Bullish divergence: price lower low, RSI higher low
+        price_lower_low = prices_low[idx2] < prices_low[idx1]
+        rsi_higher_low = rsi_vals[idx2] > rsi_vals[idx1]
+
+        return price_lower_low and rsi_higher_low
+
+    elif direction == "SELL":
+        # Find the two most recent swing highs in price
+        swing_highs = []
+        for i in range(1, len(prices_high) - 1):
+            if valid_mask[i] and prices_high[i] > prices_high[i - 1] and prices_high[i] > prices_high[i + 1]:
+                swing_highs.append(i)
+
+        if len(swing_highs) < 2:
+            return False
+
+        idx1, idx2 = swing_highs[-2], swing_highs[-1]
+
+        # Bearish divergence: price higher high, RSI lower high
+        price_higher_high = prices_high[idx2] > prices_high[idx1]
+        rsi_lower_high = rsi_vals[idx2] < rsi_vals[idx1]
+
+        return price_higher_high and rsi_lower_high
+
+    return False
+
+
+def _compute_macd(df: pd.DataFrame) -> tuple:
+    """
+    Compute MACD line, Signal line, and Histogram.
+
+    MACD Line = EMA(fast) - EMA(slow)
+    Signal Line = EMA(MACD Line, signal_period)
+    Histogram = MACD Line - Signal Line
+    """
+    fast = getattr(config, "MACD_FAST_PERIOD", 12)
+    slow = getattr(config, "MACD_SLOW_PERIOD", 26)
+    signal_period = getattr(config, "MACD_SIGNAL_PERIOD", 9)
+
+    ema_fast = df["close"].ewm(span=fast, adjust=False).mean()
+    ema_slow = df["close"].ewm(span=slow, adjust=False).mean()
+
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
+    histogram = macd_line - signal_line
+
+    return macd_line, signal_line, histogram
+
+
+def _detect_macd_cross(df: pd.DataFrame, direction: str) -> bool:
+    """
+    Detect MACD crossover as momentum confirmation.
+
+    Bullish (BUY):  MACD crosses ABOVE signal line (prev: below, curr: above)
+    Bearish (SELL): MACD crosses BELOW signal line (prev: above, curr: below)
+
+    Also checks histogram momentum (growing in the right direction).
+    """
+    if len(df) < 30:
+        return False
+
+    macd_line, signal_line, histogram = _compute_macd(df)
+
+    if len(macd_line) < 3:
+        return False
+
+    curr_macd = macd_line.iloc[-1]
+    prev_macd = macd_line.iloc[-2]
+    curr_signal = signal_line.iloc[-1]
+    prev_signal = signal_line.iloc[-2]
+    curr_hist = histogram.iloc[-1]
+    prev_hist = histogram.iloc[-2]
+
+    if pd.isna(curr_macd) or pd.isna(prev_macd) or pd.isna(curr_signal) or pd.isna(prev_signal):
+        return False
+
+    if direction == "BUY":
+        # Bullish cross: MACD crosses above signal
+        crossover = prev_macd <= prev_signal and curr_macd > curr_signal
+        # OR: histogram turning positive (momentum shift)
+        momentum_shift = prev_hist < 0 and curr_hist > 0
+
+        return crossover or momentum_shift
+
+    elif direction == "SELL":
+        # Bearish cross: MACD crosses below signal
+        crossover = prev_macd >= prev_signal and curr_macd < curr_signal
+        # OR: histogram turning negative
+        momentum_shift = prev_hist > 0 and curr_hist < 0
+
+        return crossover or momentum_shift
+
+    return False
+
+
 def get_ltf_confirmations(symbol: str, direction: str) -> int:
     """
     Count LTF confirmations for entry quality.
 
-    Checks:
+    Checks (6 total):
     1. RSI not in extreme zone opposing the entry
     2. Engulfing candle pattern
     3. Rejection / pin bar pattern
     4. Volume spike (tick_volume > 1.5x average)
+    5. RSI Divergence (price vs RSI disagreement)
+    6. MACD Cross / momentum shift
 
-    Returns: number of confirmations (0-4)
+    Returns: number of confirmations (0-6)
     """
+    # Need 40 bars for MACD (26 slow + 9 signal + buffer)
     df = mt5_bridge.get_ohlc(
         symbol,
         timeframe_minutes=config.LTF_TIMEFRAME_MINUTES,
-        count=30,
+        count=50,
     )
 
-    if df is None or len(df) < 20:
+    if df is None or len(df) < 30:
         return 0
 
     confirmations = 0
     reasons = []
 
     # --- 1. RSI Check ---
-    delta = df["close"].diff()
-    gain = delta.where(delta > 0, 0).rolling(window=config.RSI_PERIOD).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=config.RSI_PERIOD).mean()
-
-    if loss.iloc[-1] != 0:
-        rs = gain.iloc[-1] / loss.iloc[-1]
-        rsi = 100 - (100 / (1 + rs))
-    else:
-        rsi = 100.0
+    rsi_series = _compute_rsi_series(df, config.RSI_PERIOD)
+    rsi = rsi_series.iloc[-1] if not pd.isna(rsi_series.iloc[-1]) else 50.0
 
     # RSI should NOT be in extreme opposing zone
     if direction == "BUY" and rsi < config.RSI_OB:
@@ -314,8 +456,18 @@ def get_ltf_confirmations(symbol: str, direction: str) -> int:
             confirmations += 1
             reasons.append(f"Vol spike ({last_vol:.0f} vs avg {avg_vol:.0f})")
 
+    # --- 5. RSI Divergence ---
+    if _detect_rsi_divergence(df, rsi_series, direction):
+        confirmations += 1
+        reasons.append("RSI Divergence")
+
+    # --- 6. MACD Cross ---
+    if _detect_macd_cross(df, direction):
+        confirmations += 1
+        reasons.append("MACD Cross")
+
     logger.debug(
-        f"[LTF] {symbol} {direction}: {confirmations} confirmations — "
+        f"[LTF] {symbol} {direction}: {confirmations}/6 confirmations — "
         + ", ".join(reasons) if reasons else "none"
     )
     return confirmations
@@ -346,6 +498,13 @@ def validate_entry(
         (True, "OK") if all pass
         (False, reason) if any fail
     """
+    # --- Check 0 (NEW): News Blackout ---
+    if getattr(config, "ENABLE_NEWS_FILTER", False):
+        from news_filter import news_filter as _news_filter
+        is_blackout, news_reason = _news_filter.is_news_blackout(symbol)
+        if is_blackout:
+            return False, f"News blackout: {news_reason}"
+
     # --- Check 1: Trend clarity ---
     htf_trend = get_htf_trend(symbol)
     if htf_trend is None:

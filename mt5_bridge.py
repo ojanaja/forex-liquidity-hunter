@@ -537,3 +537,69 @@ def get_daily_deals() -> list[dict]:
         })
 
     return result
+
+
+# ===========================================================================
+# Economic Calendar
+# ===========================================================================
+
+def get_calendar_events(
+    from_date: datetime,
+    to_date: datetime,
+    currency: str = None,
+) -> list[dict]:
+    """
+    Fetch economic calendar events from MT5's built-in calendar.
+
+    Returns list of dicts with keys:
+        event_id, time, currency, importance, event_name
+    """
+    if not MT5_AVAILABLE:
+        logger.info("[MOCK] get_calendar_events — returning empty")
+        return []
+
+    try:
+        if currency:
+            values = mt5.calendar_value_history(from_date, to_date, currency=currency)
+        else:
+            values = mt5.calendar_value_history(from_date, to_date)
+
+        if values is None:
+            logger.debug(f"No calendar data returned for {currency or 'all'}")
+            return []
+
+        results = []
+        seen_event_ids = set()
+
+        for val in values:
+            event_id = val.event_id
+
+            # Fetch event details (name, importance) — cache-friendly
+            if event_id in seen_event_ids:
+                continue
+
+            event_detail = mt5.calendar_event_by_id(event_id)
+            if event_detail is None:
+                continue
+
+            seen_event_ids.add(event_id)
+
+            # importance: 0=None, 1=Low, 2=Moderate, 3=High
+            importance_map = {0: "NONE", 1: "LOW", 2: "MODERATE", 3: "HIGH"}
+            importance = importance_map.get(event_detail.importance, "NONE")
+
+            results.append({
+                "event_id": event_id,
+                "time": datetime.fromtimestamp(val.time),
+                "currency": event_detail.currency_code if hasattr(event_detail, 'currency_code') else currency or "",
+                "importance": importance,
+                "event_name": event_detail.name if hasattr(event_detail, 'name') else f"Event #{event_id}",
+            })
+
+        logger.debug(f"Calendar: fetched {len(results)} events for {currency or 'all'}")
+        return results
+
+    except Exception as e:
+        logger.warning(f"Calendar fetch failed: {e}")
+        return []
+

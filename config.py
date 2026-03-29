@@ -75,9 +75,21 @@ USE_FVG_50_ENTRY        = True     # 50% Consequent Encroachment
 RSI_PERIOD = 14
 RSI_OB     = 75  # Overbought (tighter = fewer but better signals)
 RSI_OS     = 25  # Oversold   (tighter = fewer but better signals)
+RSI_DIVERGENCE_LOOKBACK = 10  # Bars to look back for divergence swings
+
+# --- MACD Parameters ---
+MACD_FAST_PERIOD   = 12
+MACD_SLOW_PERIOD   = 26
+MACD_SIGNAL_PERIOD = 9
 
 # --- Breakout Parameters ---
 BREAKOUT_CONFIRMATION_CANDLES = 2
+
+# --- Order Block Parameters ---
+ENABLE_ORDER_BLOCK      = True
+OB_LOOKBACK_CANDLES     = 20     # How far back to scan for order blocks
+OB_MIN_BODY_RATIO       = 0.5    # Min body/range ratio (strong candle)
+OB_PROXIMITY_PIPS       = 5.0    # Price must be within this range of OB
 
 # --- Elliott Wave Parameters ---
 ENABLE_ELLIOTT_WAVE     = True
@@ -141,6 +153,18 @@ TIMEZONE = "Asia/Jakarta"  # UTC+7
 # =============================================================================
 SYMBOLS = [
     "EURAUDx", "EURGBPx", "GBPUSDx", "GBPJPYx", "AUDUSDx", "XAUUSDx",
+]
+
+# =============================================================================
+# NEWS FILTER (Avoid entry near high-impact economic news)
+# =============================================================================
+ENABLE_NEWS_FILTER              = True
+NEWS_BLACKOUT_MINUTES_BEFORE    = 15      # Block entry X minutes before news
+NEWS_BLACKOUT_MINUTES_AFTER     = 10      # Block entry X minutes after news
+NEWS_MIN_IMPORTANCE             = "HIGH"  # "HIGH", "MODERATE", or "LOW"
+NEWS_CACHE_MINUTES              = 30      # How often to re-fetch calendar
+NEWS_AFFECTED_CURRENCIES        = [       # Currencies we care about
+    "USD", "EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF", "XAU",
 ]
 
 # =============================================================================

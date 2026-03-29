@@ -25,6 +25,7 @@ import config
 import mt5_bridge
 from risk_manager import RiskManager
 from strategy import generate_signal
+from news_filter import news_filter
 
 # ======================================================================
 # Logging Setup
@@ -126,6 +127,9 @@ def main():
     risk = RiskManager()
     risk.log_daily_summary()
 
+    # Log upcoming news events at startup
+    news_filter.log_upcoming_events()
+
     last_summary_time = time.time()
     _symbol_cooldowns: dict[str, float] = {}  # Tracks last trade time per symbol
 
@@ -218,6 +222,9 @@ def main():
             now = time.time()
             if now - last_summary_time >= config.SUMMARY_LOG_INTERVAL_SECONDS:
                 risk.log_daily_summary()
+
+                # Log upcoming news events
+                news_filter.log_upcoming_events()
 
                 # Consistency check
                 consistency = risk.check_profit_consistency()
