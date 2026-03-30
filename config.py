@@ -164,6 +164,13 @@ TRADE_COOLDOWN_MINUTES = 30        # Prevent rapid re-entry on same symbol
 SCAN_INTERVAL_SECONDS = 10         # How often to check for signals
 SUMMARY_LOG_INTERVAL_SECONDS = 300 # 5 minutes
 
+# =============================================================================
+# TELEGRAM NOTIFICATIONS
+# =============================================================================
+ENABLE_TELEGRAM             = os.getenv("ENABLE_TELEGRAM", "True").lower() == "true"
+TELEGRAM_BOT_TOKEN          = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID            = os.getenv("TELEGRAM_CHAT_ID", "")
+
 # Logging
 LOG_DIR = "logs"
 LOG_LEVEL = "INFO"

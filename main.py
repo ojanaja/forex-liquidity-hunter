@@ -26,6 +26,7 @@ import mt5_bridge
 from risk_manager import RiskManager
 from strategy import generate_signal
 from news_filter import news_filter
+import telegram_notifier
 
 # ======================================================================
 # Logging Setup
@@ -127,6 +128,9 @@ def main():
     risk = RiskManager()
     risk.log_daily_summary()
 
+    # --- Notify Telegram: bot started ---
+    telegram_notifier.notify_bot_started()
+
     # Log upcoming news events at startup
     news_filter.log_upcoming_events()
 
@@ -215,6 +219,20 @@ def main():
                         f"RR: {signal.rr_ratio:.2f})"
                     )
 
+                    # --- Telegram notification: trade opened ---
+                    telegram_notifier.notify_trade_opened(
+                        symbol=signal.symbol,
+                        direction=signal.direction,
+                        lot_size=lot_size,
+                        entry_price=signal.entry_price,
+                        sl=signal.stop_loss,
+                        tp=signal.take_profit,
+                        rr_ratio=signal.rr_ratio,
+                        reason=signal.reason,
+                        session=session,
+                        ticket=ticket,
+                    )
+
             # --- Check for closed trades and update P/L ---
             _sync_closed_trades(risk)
 
@@ -242,8 +260,10 @@ def main():
 
     except KeyboardInterrupt:
         logger.info("\nBot stopped by user (Ctrl+C)")
+        telegram_notifier.notify_bot_stopped("Manual shutdown (Ctrl+C)")
     except Exception as e:
         logger.exception(f"Unexpected error: {e}")
+        telegram_notifier.notify_bot_stopped(f"Error: {e}")
         # Emergency: close everything
         mt5_bridge.close_all_positions()
     finally:
@@ -289,6 +309,19 @@ def _sync_closed_trades(risk: RiskManager):
                 f"=> Net=${net_profit:+.2f}"
             )
             risk.record_trade(net_profit, deal.get("symbol", ""))
+
+            # --- Telegram notification: trade closed ---
+            deal_type = deal.get("type", 0)
+            direction = "BUY" if deal_type == 0 else "SELL"
+            telegram_notifier.notify_trade_closed(
+                ticket=ticket,
+                symbol=deal.get("symbol", ""),
+                direction=direction,
+                gross_profit=gross_profit,
+                commission=commission,
+                swap=swap,
+                net_profit=net_profit,
+            )
 
 
 # ======================================================================
@@ -408,14 +441,25 @@ def _manage_checkpoints(open_positions):
                 )
 
                 # --- Partial close ---
+                volume_closed = 0
                 if close_pct > 0:
                     volume_to_close = round(state["original_volume"] * close_pct, 2)
                     if volume_to_close >= 0.01:
                         mt5_bridge.partial_close_position(p.ticket, volume_to_close)
+                        volume_closed = volume_to_close
                         logger.info(
                             f"[CHECKPOINT] {cp_name}: Closed {close_pct*100:.0f}% "
                             f"({volume_to_close} lots) of {p.symbol}"
                         )
+
+                # --- Telegram notification: checkpoint hit ---
+                telegram_notifier.notify_checkpoint_hit(
+                    symbol=p.symbol,
+                    ticket=p.ticket,
+                    checkpoint_name=cp_name,
+                    rr_achieved=rr_achieved,
+                    partial_closed=volume_closed,
+                )
 
                 # --- Move SL ---
                 if i == 0:
