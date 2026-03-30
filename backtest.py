@@ -487,8 +487,8 @@ def process_checkpoints(trade: BacktestTrade, high: float, low: float, pip_size:
                     new_sl = trade.entry - (trade.risk_distance * prev_r)
                     trade.sl = min(trade.sl, new_sl)
 
-            # After final checkpoint: enable trailing, remove TP
-            if i == len(checkpoints) - 1:
+            # After final checkpoint: enable trailing only if configured
+            if i == len(checkpoints) - 1 and getattr(config, "ENABLE_TRAILING_AFTER_FINAL", False):
                 trade.trailing_active = True
                 trade.trailing_extreme = current_best
                 trade.tp = 0  # Remove TP — let it ride
