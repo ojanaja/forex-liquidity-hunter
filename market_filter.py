@@ -261,7 +261,7 @@ def get_ltf_confirmations(symbol: str, direction: str) -> int:
     3. Rejection / pin bar pattern
     4. Volume spike (tick_volume > 1.5x average)
 
-    Returns: number of confirmations (0-4)
+    Returns: tuple with number of confirmations (0-4) and list of reason strings
     """
     df = mt5_bridge.get_ohlc(
         symbol,
@@ -318,7 +318,7 @@ def get_ltf_confirmations(symbol: str, direction: str) -> int:
         f"[LTF] {symbol} {direction}: {confirmations} confirmations — "
         + ", ".join(reasons) if reasons else "none"
     )
-    return confirmations
+    return confirmations, reasons
 
 
 # ======================================================================
@@ -372,7 +372,7 @@ def validate_entry(
         return False, "Sideways detected (low ATR + BB squeeze)"
 
     # --- Check 4: LTF Confirmations ---
-    confirms = get_ltf_confirmations(symbol, direction)
+    confirms, confirm_reasons = get_ltf_confirmations(symbol, direction)
     if confirms < config.MIN_CONFIRMATIONS:
         return False, (
             f"Insufficient confirmations: {confirms}/{config.MIN_CONFIRMATIONS}"
@@ -390,8 +390,15 @@ def validate_entry(
         if not corr_ok:
             return False, corr_reason
 
+    # Build detailed condition string to pass upward
+    conditions_msg = (
+        f"HTF Trend: {htf_trend} | "
+        f"Confirms ({confirms}/4): {', '.join(confirm_reasons) if confirm_reasons else 'None'} | "
+        f"RR: {rr_ratio:.2f}"
+    )
+
     logger.info(
         f"[VALIDATE] {symbol} {direction}: ALL CHECKS PASSED "
-        f"(trend={htf_trend}, confirms={confirms}, RR={rr_ratio:.2f})"
+        f"({conditions_msg})"
     )
-    return True, "OK"
+    return True, conditions_msg

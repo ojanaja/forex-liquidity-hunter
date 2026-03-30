@@ -137,6 +137,8 @@ def notify_trade_closed(
     commission: float,
     swap: float,
     net_profit: float,
+    close_reason: int = 0,
+    comment: str = "",
 ):
     """Send a notification when a trade is closed."""
     if not getattr(config, "ENABLE_TELEGRAM", False):
@@ -145,8 +147,17 @@ def notify_trade_closed(
     emoji = "✅" if net_profit >= 0 else "❌"
     pnl_emoji = "💰" if net_profit >= 0 else "💸"
 
+    # 4 = DEAL_REASON_SL, 5 = DEAL_REASON_TP
+    reason_label = ""
+    if close_reason == 4:
+        reason_label = " 🛑 (Hit SL)"
+    elif close_reason == 5:
+        reason_label = " 🎯 (Hit TP)"
+    elif "TP_PARTIAL" in comment:
+        reason_label = " ✂️ (Partial TP)"
+
     text = (
-        f"{emoji} <b>TRADE CLOSED</b> {emoji}\n"
+        f"{emoji} <b>TRADE CLOSED{reason_label}</b> {emoji}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 <b>{symbol}</b> — {direction}\n"
         f"🎟 Ticket: <code>#{ticket}</code>\n"

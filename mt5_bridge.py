@@ -533,6 +533,8 @@ def get_daily_deals() -> list[dict]:
             "profit": d.profit,
             "commission": d.commission,
             "swap": d.swap,
+            "reason": getattr(d, 'reason', 0),  # 4 = SL, 5 = TP
+            "comment": getattr(d, 'comment', ""),
             "time": datetime.fromtimestamp(d.time),
         })
 

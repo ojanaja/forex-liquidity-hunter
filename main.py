@@ -321,6 +321,8 @@ def _sync_closed_trades(risk: RiskManager):
                 commission=commission,
                 swap=swap,
                 net_profit=net_profit,
+                close_reason=deal.get("reason", 0),
+                comment=deal.get("comment", ""),
             )
 
 

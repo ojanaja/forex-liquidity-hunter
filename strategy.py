@@ -293,6 +293,9 @@ def generate_signal(symbol: str, risk_manager=None) -> Optional[Signal]:
         )
 
         if valid:
+            # Append the detailed entry conditions to the signal reason for Telegram
+            signal.reason = f"{signal.reason}\n   └ <i>{reason}</i>"
+
             logger.info(
                 f"[SIGNAL] {symbol} {signal.direction} via {signal.reason} "
                 f"(RR={signal.rr_ratio:.2f}, SL={signal.sl_pips:.1f} pips)"
