@@ -64,8 +64,15 @@ def _send_message(text: str, parse_mode: str = "HTML") -> bool:
             logger.warning(f"Telegram send error: {e}")
 
     # Fire-and-forget in background thread so it won't block trading
-    thread = threading.Thread(target=_do_send, daemon=True)
-    thread.start()
+    try:
+        thread = threading.Thread(target=_do_send, daemon=True)
+        thread.start()
+    except (RuntimeError, KeyboardInterrupt):
+        # Python is shutting down — try synchronous send as last resort
+        try:
+            _do_send()
+        except Exception:
+            pass
     return True
 
 
