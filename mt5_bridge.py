@@ -543,6 +543,9 @@ def get_daily_deals() -> list[dict]:
 # Economic Calendar
 # ===========================================================================
 
+_calendar_warned = False  # Only warn once about missing calendar API
+
+
 def get_calendar_events(
     from_date: datetime,
     to_date: datetime,
@@ -553,9 +556,24 @@ def get_calendar_events(
 
     Returns list of dicts with keys:
         event_id, time, currency, importance, event_name
+
+    Note: calendar_value_history is only available on certain MT5 builds.
+    If unavailable, returns empty list (news_filter falls back to static schedule).
     """
+    global _calendar_warned
+
     if not MT5_AVAILABLE:
         logger.info("[MOCK] get_calendar_events — returning empty")
+        return []
+
+    # Check if MT5 build supports calendar API (only warn once)
+    if not hasattr(mt5, "calendar_value_history"):
+        if not _calendar_warned:
+            logger.info(
+                "[NEWS] MT5 calendar API not available in this build. "
+                "Using static news schedule as fallback."
+            )
+            _calendar_warned = True
         return []
 
     try:
@@ -599,6 +617,15 @@ def get_calendar_events(
         logger.debug(f"Calendar: fetched {len(results)} events for {currency or 'all'}")
         return results
 
+    except AttributeError:
+        # Handle case where method exists but raises AttributeError internally
+        if not _calendar_warned:
+            logger.info(
+                "[NEWS] MT5 calendar API not supported by this broker/build. "
+                "Using static news schedule as fallback."
+            )
+            _calendar_warned = True
+        return []
     except Exception as e:
         logger.warning(f"Calendar fetch failed: {e}")
         return []
