@@ -250,22 +250,27 @@ def notify_checkpoint_hit(
     checkpoint_name: str,
     rr_achieved: float,
     partial_closed: float = 0,
+    new_sl: float = 0,
 ):
     """Send notification when a TP checkpoint is hit."""
     if not getattr(config, "ENABLE_TELEGRAM", False):
         return
 
     text = (
-        f"🎯 <b>CHECKPOINT HIT: {checkpoint_name}</b>\n"
+        f"🎯 <b>{checkpoint_name} HIT — Break-Even Activated!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 <b>{symbol}</b> — Ticket <code>#{ticket}</code>\n"
         f"📐 R Achieved: <b>{rr_achieved:.2f}R</b>\n"
     )
 
     if partial_closed > 0:
-        text += f"✂️ Partial Close: {partial_closed} lots\n"
+        text += f"✂️ Closed: <b>{partial_closed} lots</b> (80% secured)\n"
+
+    if new_sl > 0:
+        text += f"🛡️ SL → BE + commission: <code>{new_sl:.5f}</code>\n"
 
     text += (
+        f"📌 Remaining 20% rides to full TP (2R)\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )

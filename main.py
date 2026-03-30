@@ -454,26 +454,18 @@ def _manage_checkpoints(open_positions):
                             f"({volume_to_close} lots) of {p.symbol}"
                         )
 
-                # --- Telegram notification: checkpoint hit ---
-                telegram_notifier.notify_checkpoint_hit(
-                    symbol=p.symbol,
-                    ticket=p.ticket,
-                    checkpoint_name=cp_name,
-                    rr_achieved=rr_achieved,
-                    partial_closed=volume_closed,
-                )
-
                 # --- Move SL ---
+                new_sl = 0
                 if i == 0:
-                    # TP1: SL to entry + 0.5R (locks in real profit, not just BE)
-                    sl_lock = state["risk_distance"] * 0.5
+                    # First checkpoint: SL to Break-Even + commission/spread buffer
+                    be_buffer = _calc_be_buffer(sym_info, state["original_volume"], pip_size)
                     if direction == "BUY":
-                        new_sl = state["entry_price"] + sl_lock
+                        new_sl = state["entry_price"] + be_buffer
                     else:
-                        new_sl = state["entry_price"] - sl_lock
+                        new_sl = state["entry_price"] - be_buffer
                     mt5_bridge.modify_position_sl(p.ticket, new_sl)
                     logger.info(
-                        f"[CHECKPOINT] {cp_name}: SL -> entry+0.5R ({new_sl:.5f})"
+                        f"[CHECKPOINT] {cp_name}: SL -> BE + commission ({new_sl:.5f})"
                     )
                 else:
                     # TP2+: SL to previous checkpoint level
@@ -486,6 +478,16 @@ def _manage_checkpoints(open_positions):
                     logger.info(
                         f"[CHECKPOINT] {cp_name}: SL -> TP{i} level ({new_sl:.5f})"
                     )
+
+                # --- Telegram notification: checkpoint hit ---
+                telegram_notifier.notify_checkpoint_hit(
+                    symbol=p.symbol,
+                    ticket=p.ticket,
+                    checkpoint_name=cp_name,
+                    rr_achieved=rr_achieved,
+                    partial_closed=volume_closed,
+                    new_sl=new_sl,
+                )
 
                 # --- After final checkpoint: remove TP, enable trailing ---
                 is_final = (i == len(checkpoints) - 1)

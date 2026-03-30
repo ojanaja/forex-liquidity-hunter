@@ -19,6 +19,7 @@ from typing import Optional
 
 import config
 import mt5_bridge
+import telegram_notifier
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,10 @@ class RiskManager:
             )
             # Emergency close all positions
             mt5_bridge.close_all_positions()
+            telegram_notifier.notify_bot_stopped(
+                f"🚨 Daily loss limit hit: ${total_daily_pnl:.2f} "
+                f"(limit: -${config.DAILY_LOSS_LIMIT:.2f}). All positions closed."
+            )
             return False
 
         # Rule 2: Total Loss Limit
@@ -84,6 +89,10 @@ class RiskManager:
                 f"⚠️ BOT SHOULD BE DISABLED PERMANENTLY."
             )
             mt5_bridge.close_all_positions()
+            telegram_notifier.notify_bot_stopped(
+                f"🚨🚨 TOTAL LOSS LIMIT HIT: ${cumulative_total:.2f} "
+                f"(limit: -${config.TOTAL_LOSS_LIMIT:.2f}). BOT MUST BE DISABLED!"
+            )
             return False
 
         # Rule 3: Daily Profit Cap (consistency) - LOG ONLY per user request
@@ -273,6 +282,10 @@ class RiskManager:
             logger.info(
                 f"🎉🎉🎉 PROFIT TARGET REACHED! "
                 f"${s['cumulative_pnl']:.2f} / ${config.PROFIT_TARGET:.2f} 🎉🎉🎉"
+            )
+            telegram_notifier.notify_bot_stopped(
+                f"🎉🎉🎉 PROFIT TARGET REACHED! "
+                f"${s['cumulative_pnl']:.2f} / ${config.PROFIT_TARGET:.2f}"
             )
 
     # ===================================================================

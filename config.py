@@ -68,7 +68,7 @@ RANGE_TIMEFRAME_MINUTES = 15       # Session range identification
 SWEEP_THRESHOLD_PIPS    = 2.0      # Ignore micro-sweeps (too noisy at 0.5)
 FVG_MIN_SIZE_PIPS       = 1.0      # Real institutional FVG needs > 1.0 pip
 SL_BUFFER_PIPS          = 3.0      # Extra SL room to avoid stop hunts
-TP_RATIO                = 3.0      # 1:3 RR — gives room for TP2 checkpoint (2.5R < 3.0R)
+TP_RATIO                = 2.0      # 1:2 RR — full TP, no partial close
 USE_FVG_50_ENTRY        = True     # 50% Consequent Encroachment
 
 # --- RSI Parameters ---
@@ -89,26 +89,22 @@ EW_LOOKBACK_BARS        = 120      # M15 bars to analyze (120 × 15min = 30h)
 EW_MAX_SL_PIPS          = 50.0     # Max SL for EW trades
 
 # --- Minimum Risk Reward (Req #7) ---
-MIN_RISK_REWARD_RATIO = 2.0       # Minimum 1:2 RR required
+MIN_RISK_REWARD_RATIO = 2.0       # Minimum 1:2 RR required (matches TP_RATIO)
 
 # =============================================================================
-# HYBRID TP CHECKPOINT SYSTEM
+# BREAKEVEN + PARTIAL TP SYSTEM
 # =============================================================================
-# Checkpoint levels in multiples of Risk (1R = SL distance)
-# At each checkpoint: partial close + move SL to previous checkpoint
-# After final checkpoint: remove TP and trail SL
-#
-# Example with TP_CHECKPOINTS = [1.0, 2.0, 3.0]:
-#   TP1 (1R):  Close 40%, move SL to BE + commission
-#   TP2 (2R):  Close 30%, move SL to TP1 level
-#   TP3 (3R):  Keep remaining 30%, REMOVE TP, move SL to TP2, start trailing
+# When price hits 1R (same distance as SL, i.e. 1:1 RR):
+#   - Move SL to Break-Even + commission buffer (lock in zero-loss)
+#   - Close 80% of position (secure profit)
+#   - Remaining 20% rides to full TP at 2R
 # =============================================================================
 ENABLE_CHECKPOINT_TP        = True
-TP_CHECKPOINTS              = [1.5, 2.5, 3.5]    # Higher checkpoints = bigger partial wins
-TP_PARTIAL_CLOSE_PCTS       = [0.80, 0.10, 0.00]  # TP1: 80%, TP2: 10%, TP3: keep 10% trailing
-ENABLE_TRAILING_AFTER_FINAL = True                 # Trail SL after last checkpoint
-TRAILING_STEP_PIPS          = 10.0                 # Trail SL step size in pips
-TRAILING_ACTIVATION_R       = 3.0                  # Start trailing after this R level
+TP_CHECKPOINTS              = [1.0]       # Single checkpoint at 1R (1:1 RR)
+TP_PARTIAL_CLOSE_PCTS       = [0.80]      # Close 80% at 1R
+ENABLE_TRAILING_AFTER_FINAL = False       # No trailing — let remaining 20% hit TP at 2R
+TRAILING_STEP_PIPS          = 10.0        # (unused)
+TRAILING_ACTIVATION_R       = 3.0         # (unused)
 
 # Commission / spread buffer for BE level
 ESTIMATED_COMMISSION_PER_LOT = 7.0  # $ per round-turn lot

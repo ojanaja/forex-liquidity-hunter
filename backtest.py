@@ -65,7 +65,7 @@ class BacktestTrade:
     entry_time: object       # timestamp
     original_volume: float = 1.0
     remaining_volume_pct: float = 1.0  # Track partial close %
-    checkpoints_hit: list = field(default_factory=lambda: [False, False, False])
+    checkpoints_hit: list = field(default_factory=lambda: [False] * len(getattr(config, 'TP_CHECKPOINTS', [1.0])))
     trailing_active: bool = False
     trailing_extreme: float = 0.0  # High watermark (BUY) or low watermark (SELL)
 
@@ -468,12 +468,15 @@ def process_checkpoints(trade: BacktestTrade, high: float, low: float, pip_size:
 
             # Move SL
             if i == 0:
-                # SL to entry + 0.5R (locks in profit, not just breakeven)
-                sl_lock = trade.risk_distance * 0.5
+                # SL to Break-Even + commission/spread buffer
+                # Mirror the live bot's _calc_be_buffer logic
+                commission_distance = (COMMISSION_PER_LOT / (RISK_PER_TRADE / trade.risk_distance * pip_size)) * pip_size if RISK_PER_TRADE > 0 else 0
+                spread_distance = SPREAD_COST_PIPS * pip_size
+                be_buffer = commission_distance + spread_distance
                 if trade.trade_type == "BUY":
-                    trade.sl = max(trade.sl, trade.entry + sl_lock)
+                    trade.sl = max(trade.sl, trade.entry + be_buffer)
                 else:
-                    trade.sl = min(trade.sl, trade.entry - sl_lock)
+                    trade.sl = min(trade.sl, trade.entry - be_buffer)
             else:
                 # SL to previous checkpoint
                 prev_r = checkpoints[i - 1]
