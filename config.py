@@ -163,7 +163,7 @@ NEWS_AFFECTED_CURRENCIES        = [       # Currencies we care about
 # =============================================================================
 # SAFETY / EXECUTION
 # =============================================================================
-DRY_RUN = False                     # SAFETY: validate strategy before risking real $
+DRY_RUN = True                     # SAFETY: validate strategy before risking real $
 MAX_SPREAD_PIPS = 80.0             # Max allowed spread (80.0 for Gold)
 TRADE_COOLDOWN_MINUTES = 30        # Prevent rapid re-entry on same symbol
 SCAN_INTERVAL_SECONDS = 10         # How often to check for signals
