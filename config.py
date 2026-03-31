@@ -76,6 +76,10 @@ USE_FVG_50_ENTRY        = True     # 50% Consequent Encroachment
 MIN_SL_PIPS             = 15.0     # Min SL for forex pairs (e.g., EURUSD, GBPJPY)
 MIN_SL_PIPS_XAU         = 50.0     # Min SL for XAUUSD (Gold needs more room)
 
+# --- Impulse Candle Filter (blocks entry against strong momentum) ---
+IMPULSE_BODY_MULTIPLIER = 2.0      # Candle body > 2x avg body = impulse
+                                    # Prevents selling into huge green candles (or vice versa)
+
 # --- RSI Parameters ---
 RSI_PERIOD = 14
 RSI_OB     = 75  # Overbought (tighter = fewer but better signals)

@@ -322,7 +322,75 @@ def get_ltf_confirmations(symbol: str, direction: str) -> int:
 
 
 # ======================================================================
-# 4. Master Validation Gate (6-Point Pre-Entry Check)
+# 3b. Impulse Candle Detection (Anti-Momentum-Reversal)
+# ======================================================================
+
+def detect_impulse_against(symbol: str, direction: str) -> tuple[bool, str]:
+    """
+    Detect if recent candles show strong impulsive momentum AGAINST the
+    proposed entry direction.
+
+    An impulse candle is:
+    - Body size > 2x average body (last 20 candles)
+    - Body uses > 70% of total candle range (small wicks)
+
+    Returns:
+        (True, reason) if entry is BLOCKED (impulse opposes direction)
+        (False, "")   if no opposing impulse detected
+    """
+    df = mt5_bridge.get_ohlc(
+        symbol,
+        timeframe_minutes=config.LTF_TIMEFRAME_MINUTES,
+        count=25,
+    )
+
+    if df is None or len(df) < 20:
+        return False, ""
+
+    # Check the last 3 candles for impulse (catches impulse that just happened)
+    bodies = (df["close"] - df["open"]).abs()
+    avg_body = bodies.iloc[-20:-1].mean()
+
+    if avg_body <= 0:
+        return False, ""
+
+    impulse_multiplier = getattr(config, "IMPULSE_BODY_MULTIPLIER", 2.0)
+
+    for lookback in range(1, 4):  # Check last 3 candles
+        candle = df.iloc[-lookback]
+        body = abs(candle["close"] - candle["open"])
+        total_range = candle["high"] - candle["low"]
+
+        if total_range <= 0:
+            continue
+
+        body_ratio = body / total_range  # How much of the candle is body vs wick
+        body_vs_avg = body / avg_body
+
+        is_impulse = body_vs_avg >= impulse_multiplier and body_ratio >= 0.70
+
+        if is_impulse:
+            is_bullish = candle["close"] > candle["open"]
+
+            # Block SELL into bullish impulse, block BUY into bearish impulse
+            if direction == "SELL" and is_bullish:
+                return True, (
+                    f"Bullish impulse candle detected "
+                    f"(body {body_vs_avg:.1f}x avg, {body_ratio:.0%} body ratio) — "
+                    f"don't SELL into momentum"
+                )
+            elif direction == "BUY" and not is_bullish:
+                return True, (
+                    f"Bearish impulse candle detected "
+                    f"(body {body_vs_avg:.1f}x avg, {body_ratio:.0%} body ratio) — "
+                    f"don't BUY into momentum"
+                )
+
+    return False, ""
+
+
+# ======================================================================
+# 4. Master Validation Gate (7-Point Pre-Entry Check)
 # ======================================================================
 
 def validate_entry(
@@ -370,6 +438,11 @@ def validate_entry(
     # --- Check 3: Sideways detection (ATR + BB) ---
     if is_sideways(symbol):
         return False, "Sideways detected (low ATR + BB squeeze)"
+
+    # --- Check 3b: Impulse candle filter ---
+    impulse_blocked, impulse_reason = detect_impulse_against(symbol, direction)
+    if impulse_blocked:
+        return False, impulse_reason
 
     # --- Check 4: LTF Confirmations ---
     confirms, confirm_reasons = get_ltf_confirmations(symbol, direction)

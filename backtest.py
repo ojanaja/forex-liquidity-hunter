@@ -800,6 +800,37 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                     signal = ew_result
 
             # ══════════════════════════════════════════════════
+            # VALIDATION: Impulse Candle Filter
+            # ══════════════════════════════════════════════════
+            if signal is not None:
+                impulse_multiplier = getattr(config, "IMPULSE_BODY_MULTIPLIER", 2.0)
+                m5_recent = df_m5.loc[:ts].tail(25)
+                if len(m5_recent) >= 20:
+                    bodies = (m5_recent["close"] - m5_recent["open"]).abs()
+                    avg_body = bodies.iloc[-20:-1].mean()
+                    if avg_body > 0:
+                        for lb in range(1, 4):
+                            if lb > len(m5_recent):
+                                break
+                            rc = m5_recent.iloc[-lb]
+                            rc_body = abs(rc["close"] - rc["open"])
+                            rc_range = rc["high"] - rc["low"]
+                            if rc_range <= 0:
+                                continue
+                            if rc_body / avg_body >= impulse_multiplier and rc_body / rc_range >= 0.70:
+                                is_bull = rc["close"] > rc["open"]
+                                if signal["type"] == "SELL" and is_bull:
+                                    dx.setdefault("impulse_block", 0)
+                                    dx["impulse_block"] += 1
+                                    signal = None
+                                    break
+                                elif signal["type"] == "BUY" and not is_bull:
+                                    dx.setdefault("impulse_block", 0)
+                                    dx["impulse_block"] += 1
+                                    signal = None
+                                    break
+
+            # ══════════════════════════════════════════════════
             # FINAL VALIDATION: LTF Confirmations
             # ══════════════════════════════════════════════════
             if signal is None:
@@ -1303,6 +1334,7 @@ def run_backtest():
     print(f"  Correlation block:   {diagnostics.get('corr_block', 0):>8}  (blocked)")
     print(f"  Concurrent block:    {diagnostics.get('concurrent_block', 0):>8}  (blocked)")
     print(f"  No signal generated: {diagnostics.get('no_signal', 0):>8}")
+    print(f"  Impulse blocked:     {diagnostics.get('impulse_block', 0):>8}  (blocked)")
     print(f"  Confirm fail (<{config.MIN_CONFIRMATIONS}):  {diagnostics.get('confirm_fail', 0):>8}  (blocked)")
     print(f"  Trades opened:       {diagnostics.get('trades_opened', 0):>8}")
 
