@@ -59,7 +59,7 @@ BB_SQUEEZE_THRESHOLD        = 0.003 # Band width / price < 0.3% = squeeze
 # STRATEGY MODULES (V18 Multi-Engine)
 # =============================================================================
 ENABLE_SMC_SWEEP = True
-ENABLE_BREAKOUT  = True
+ENABLE_BREAKOUT  = False   # Disabled — too many fakeouts in live
 ENABLE_RSI_SCALP = True
 
 # --- Strategy Parameters ---
@@ -67,9 +67,14 @@ SCAN_TIMEFRAME_MINUTES  = 1        # Fast M1 scanning
 RANGE_TIMEFRAME_MINUTES = 15       # Session range identification
 SWEEP_THRESHOLD_PIPS    = 2.0      # Ignore micro-sweeps (too noisy at 0.5)
 FVG_MIN_SIZE_PIPS       = 1.0      # Real institutional FVG needs > 1.0 pip
-SL_BUFFER_PIPS          = 3.0      # Extra SL room to avoid stop hunts
+SL_BUFFER_PIPS          = 5.0      # Extra SL room to avoid stop hunts (was 3.0)
 TP_RATIO                = 2.0      # 1:2 RR — full TP, no partial close
 USE_FVG_50_ENTRY        = True     # 50% Consequent Encroachment
+
+# --- Minimum SL Distance (prevents razor-thin SL) ---
+# Risk stays the same because lot size auto-adjusts: wider SL = smaller lot
+MIN_SL_PIPS             = 15.0     # Min SL for forex pairs (e.g., EURUSD, GBPJPY)
+MIN_SL_PIPS_XAU         = 50.0     # Min SL for XAUUSD (Gold needs more room)
 
 # --- RSI Parameters ---
 RSI_PERIOD = 14

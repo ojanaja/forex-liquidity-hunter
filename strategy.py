@@ -276,6 +276,31 @@ def generate_signal(symbol: str, risk_manager=None) -> Optional[Signal]:
 
     # --- Validate each candidate through the 6-point gate ---
     for signal in candidates:
+        # --- Minimum SL distance check ---
+        # Wider SL = smaller lot size = same dollar risk
+        min_sl = getattr(config, "MIN_SL_PIPS_XAU", 50.0) if "XAU" in symbol else \
+                 getattr(config, "MIN_SL_PIPS", 15.0)
+
+        if signal.sl_pips < min_sl:
+            # Widen SL to minimum and recalculate TP to maintain RR
+            old_sl_pips = signal.sl_pips
+            sl_dist_new = min_sl * pip_size
+
+            if signal.direction == "BUY":
+                signal.stop_loss = signal.entry_price - sl_dist_new
+                signal.take_profit = signal.entry_price + sl_dist_new * config.TP_RATIO
+            else:
+                signal.stop_loss = signal.entry_price + sl_dist_new
+                signal.take_profit = signal.entry_price - sl_dist_new * config.TP_RATIO
+
+            signal.sl_pips = min_sl
+            signal.rr_ratio = _calc_rr_ratio(signal.entry_price, signal.stop_loss, signal.take_profit)
+
+            logger.info(
+                f"[SL-WIDEN] {symbol}: SL widened {old_sl_pips:.1f} -> {min_sl:.1f} pips "
+                f"(lot size will auto-adjust, risk stays same)"
+            )
+
         # RR pre-check (quick reject)
         if signal.rr_ratio < config.MIN_RISK_REWARD_RATIO:
             logger.info(

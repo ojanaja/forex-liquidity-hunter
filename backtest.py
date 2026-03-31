@@ -815,6 +815,20 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
             # OPEN TRADE
             # ══════════════════════════════════════════════════
             if signal is not None:
+                # --- Minimum SL enforcement (matches live strategy.py) ---
+                sl_pips_raw = abs(signal["entry"] - signal["sl"]) / pip_size
+                min_sl = getattr(config, "MIN_SL_PIPS_XAU", 50.0) if "XAU" in symbol else \
+                         getattr(config, "MIN_SL_PIPS", 15.0)
+
+                if sl_pips_raw < min_sl:
+                    sl_dist_new = min_sl * pip_size
+                    if signal["type"] == "BUY":
+                        signal["sl"] = signal["entry"] - sl_dist_new
+                        signal["tp"] = signal["entry"] + sl_dist_new * config.TP_RATIO
+                    else:
+                        signal["sl"] = signal["entry"] + sl_dist_new
+                        signal["tp"] = signal["entry"] - sl_dist_new * config.TP_RATIO
+
                 dx["trades_opened"] += 1
                 _ticket_counter += 1
                 risk_dist = abs(signal["entry"] - signal["sl"])
