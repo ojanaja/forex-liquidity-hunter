@@ -18,8 +18,8 @@ MT5_PATH = os.getenv("MT5_PATH", None)  # Optional: path to terminal64.exe
 # =============================================================================
 # ACCOUNT RULES
 # =============================================================================
-ACCOUNT_BALANCE         = 9843.0   # Actual current balance
-MAX_RISK_PER_TRADE_PCT  = 0.5      # 0.5% risk (only $49/trade — protect $243 buffer)
+ACCOUNT_BALANCE         = 10000.0   # Actual current balance
+MAX_RISK_PER_TRADE_PCT  = 1.0      # 0.5% risk (only $49/trade — protect $243 buffer)
 DAILY_LOSS_LIMIT        = 100.0    # Stop if down $100 in a day
 TOTAL_LOSS_LIMIT        = 200.0    # Hard stop at $9,643 (safe above $9,600)
 PROFIT_TARGET           = 600.0    # 6% monthly target
