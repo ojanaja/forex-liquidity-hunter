@@ -176,6 +176,14 @@ ENABLE_TELEGRAM             = os.getenv("ENABLE_TELEGRAM", "True").lower() == "t
 TELEGRAM_BOT_TOKEN          = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID            = os.getenv("TELEGRAM_CHAT_ID", "")
 
+# =============================================================================
+# SCHEDULED REPORTS
+# =============================================================================
+DAILY_REPORT_HOUR           = 6       # Jam kirim daily report (WIB)
+ENABLE_WEEKLY_REPORT        = True    # Kirim weekly report setiap Senin
+ENABLE_MONTHLY_REPORT       = True    # Kirim monthly report setiap tanggal 1
+REPORTS_DIR                 = "reports"
+
 # Logging
 LOG_DIR = "logs"
 LOG_LEVEL = "INFO"

@@ -12,12 +12,14 @@ Flow:
   5. 6-point pre-entry validation gate
   6. Auto break-even with commission/spread protection
   7. Log daily summary every 5 minutes
+  8. Dry run: track virtual trades & detect SL/TP hits
+  9. Scheduled reports: daily (6AM), weekly (Monday), monthly (1st)
 """
 import sys
 import os
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 import pytz
 
@@ -27,6 +29,7 @@ from risk_manager import RiskManager
 from strategy import generate_signal
 from news_filter import news_filter
 import telegram_notifier
+import report_generator
 
 # ======================================================================
 # Logging Setup
@@ -86,6 +89,174 @@ def get_active_session() -> str | None:
 
 
 # ======================================================================
+# Scheduled Report System
+# ======================================================================
+
+def _send_daily_report(tracker, risk: RiskManager):
+    """
+    Generate and send daily PDF report for yesterday's trades.
+    """
+    tz = pytz.timezone(config.TIMEZONE)
+    yesterday = (datetime.now(tz) - timedelta(days=1)).date()
+
+    logger.info(f"[REPORT] Generating daily report for {yesterday}...")
+
+    if tracker:
+        # Dry run mode: use tracker data
+        trades = tracker.get_closed_trades(start_date=yesterday, end_date=yesterday)
+        stats = tracker.get_stats(start_date=yesterday, end_date=yesterday)
+        cumulative_pnl = sum(t.pnl for t in tracker.closed_trades)
+    else:
+        # Live mode: empty for now (MT5 deals are tracked by risk manager)
+        trades = []
+        stats = {
+            "total_trades": risk.daily_trade_count,
+            "wins": risk.daily_wins,
+            "losses": risk.daily_losses,
+            "win_rate": (risk.daily_wins / risk.daily_trade_count * 100)
+                        if risk.daily_trade_count > 0 else 0,
+            "total_pnl": risk.daily_realized_pnl,
+            "avg_pnl_per_trade": (risk.daily_realized_pnl / risk.daily_trade_count)
+                                 if risk.daily_trade_count > 0 else 0,
+            "pair_stats": {},
+            "sl_count": 0,
+            "tp_count": 0,
+            "max_drawdown": 0,
+            "profit_factor": "—",
+            "avg_rr_achieved": 0,
+            "longest_win_streak": 0,
+            "longest_loss_streak": 0,
+        }
+        cumulative_pnl = risk.cumulative_pnl + risk.daily_realized_pnl
+
+    pdf_path = report_generator.generate_daily_report(
+        trades=trades,
+        stats=stats,
+        report_date=yesterday,
+        cumulative_pnl=cumulative_pnl,
+    )
+
+    if pdf_path:
+        telegram_notifier.notify_daily_report(
+            pdf_path=pdf_path,
+            stats=stats,
+            report_date=yesterday,
+        )
+    else:
+        logger.warning("[REPORT] Daily PDF generation failed.")
+
+
+def _send_weekly_report(tracker, risk: RiskManager):
+    """
+    Generate and send weekly PDF report for last week's trades.
+    Called every Monday.
+    """
+    tz = pytz.timezone(config.TIMEZONE)
+    today = datetime.now(tz).date()
+    # Last week = Monday to Sunday
+    week_end = today - timedelta(days=1)  # Yesterday (Sunday)
+    week_start = week_end - timedelta(days=6)  # Last Monday
+
+    logger.info(f"[REPORT] Generating weekly report for {week_start} to {week_end}...")
+
+    if tracker:
+        trades = tracker.get_closed_trades(start_date=week_start, end_date=week_end)
+        stats = tracker.get_stats(start_date=week_start, end_date=week_end)
+        cumulative_pnl = sum(t.pnl for t in tracker.closed_trades)
+    else:
+        trades = []
+        stats = _empty_stats(risk)
+        cumulative_pnl = risk.cumulative_pnl + risk.daily_realized_pnl
+
+    pdf_path = report_generator.generate_weekly_report(
+        trades=trades,
+        stats=stats,
+        week_start=week_start,
+        week_end=week_end,
+        cumulative_pnl=cumulative_pnl,
+    )
+
+    if pdf_path:
+        telegram_notifier.notify_weekly_report(
+            pdf_path=pdf_path,
+            stats=stats,
+            week_start=week_start,
+            week_end=week_end,
+        )
+    else:
+        logger.warning("[REPORT] Weekly PDF generation failed.")
+
+
+def _send_monthly_report(tracker, risk: RiskManager):
+    """
+    Generate and send monthly PDF report for last month's trades.
+    Called on the 1st of every month.
+    """
+    tz = pytz.timezone(config.TIMEZONE)
+    today = datetime.now(tz).date()
+    # Last month
+    first_of_this_month = today.replace(day=1)
+    last_month_end = first_of_this_month - timedelta(days=1)
+    last_month_start = last_month_end.replace(day=1)
+
+    report_month = last_month_end.month
+    report_year = last_month_end.year
+
+    logger.info(f"[REPORT] Generating monthly report for {report_year}-{report_month:02d}...")
+
+    if tracker:
+        trades = tracker.get_closed_trades(
+            start_date=last_month_start, end_date=last_month_end
+        )
+        stats = tracker.get_stats(
+            start_date=last_month_start, end_date=last_month_end
+        )
+        cumulative_pnl = sum(t.pnl for t in tracker.closed_trades)
+    else:
+        trades = []
+        stats = _empty_stats(risk)
+        cumulative_pnl = risk.cumulative_pnl + risk.daily_realized_pnl
+
+    pdf_path = report_generator.generate_monthly_report(
+        trades=trades,
+        stats=stats,
+        report_month=report_month,
+        report_year=report_year,
+        cumulative_pnl=cumulative_pnl,
+    )
+
+    if pdf_path:
+        telegram_notifier.notify_monthly_report(
+            pdf_path=pdf_path,
+            stats=stats,
+            report_month=report_month,
+            report_year=report_year,
+        )
+    else:
+        logger.warning("[REPORT] Monthly PDF generation failed.")
+
+
+def _empty_stats(risk: RiskManager) -> dict:
+    """Return empty stats dict for live mode (placeholder)."""
+    return {
+        "total_trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0,
+        "avg_pnl_per_trade": 0,
+        "pair_stats": {},
+        "sl_count": 0,
+        "tp_count": 0,
+        "max_drawdown": 0,
+        "profit_factor": "—",
+        "avg_rr_achieved": 0,
+        "longest_win_streak": 0,
+        "longest_loss_streak": 0,
+    }
+
+
+# ======================================================================
 # Main Loop
 # ======================================================================
 
@@ -128,6 +299,17 @@ def main():
     risk = RiskManager()
     risk.log_daily_summary()
 
+    # --- Initialize Dry Run Tracker ---
+    dry_tracker = None
+    if config.DRY_RUN:
+        from dry_run_tracker import DryRunTracker
+        dry_tracker = DryRunTracker()
+        logger.info(
+            f"[DRY_RUN] Tracker initialized: "
+            f"{len(dry_tracker.open_trades)} open trades, "
+            f"{len(dry_tracker.closed_trades)} historical trades"
+        )
+
     # --- Notify Telegram: bot started ---
     telegram_notifier.notify_bot_started()
 
@@ -137,6 +319,11 @@ def main():
     last_summary_time = time.time()
     _symbol_cooldowns: dict[str, float] = {}  # Tracks last trade time per symbol
 
+    # --- Report scheduler state ---
+    last_daily_report_date: date | None = None
+    last_weekly_report_date: date | None = None
+    last_monthly_report_date: date | None = None
+
     try:
         logger.info(
             f"Bot started. Monitoring sessions: "
@@ -145,6 +332,11 @@ def main():
         logger.info(f"Pairs: {', '.join(config.SYMBOLS)}")
         logger.info(
             f"Correlation groups: {len(config.CORRELATION_GROUPS)} groups configured"
+        )
+        logger.info(
+            f"Report schedule: Daily @{config.DAILY_REPORT_HOUR}:00 WIB, "
+            f"Weekly: {'ON' if config.ENABLE_WEEKLY_REPORT else 'OFF'}, "
+            f"Monthly: {'ON' if config.ENABLE_MONTHLY_REPORT else 'OFF'}"
         )
 
         while True:
@@ -158,10 +350,53 @@ def main():
             
             logger.info(f"Scanning... [Session: {session}]")
 
+            # === SCHEDULED REPORTS (check every cycle) ===
+            tz = pytz.timezone(config.TIMEZONE)
+            now_tz = datetime.now(tz)
+            report_hour = getattr(config, "DAILY_REPORT_HOUR", 6)
+
+            # Allow a window of SCAN_INTERVAL + buffer to not miss the trigger
+            if now_tz.hour == report_hour and now_tz.minute < 5:
+                # --- Daily Report ---
+                if last_daily_report_date != now_tz.date():
+                    try:
+                        _send_daily_report(dry_tracker, risk)
+                        last_daily_report_date = now_tz.date()
+                    except Exception as e:
+                        logger.error(f"[REPORT] Daily report failed: {e}")
+
+                # --- Weekly Report (Monday) ---
+                if (
+                    getattr(config, "ENABLE_WEEKLY_REPORT", True)
+                    and now_tz.weekday() == 0  # Monday
+                    and last_weekly_report_date != now_tz.date()
+                ):
+                    try:
+                        _send_weekly_report(dry_tracker, risk)
+                        last_weekly_report_date = now_tz.date()
+                    except Exception as e:
+                        logger.error(f"[REPORT] Weekly report failed: {e}")
+
+                # --- Monthly Report (1st of month) ---
+                if (
+                    getattr(config, "ENABLE_MONTHLY_REPORT", True)
+                    and now_tz.day == 1
+                    and last_monthly_report_date != now_tz.date()
+                ):
+                    try:
+                        _send_monthly_report(dry_tracker, risk)
+                        last_monthly_report_date = now_tz.date()
+                    except Exception as e:
+                        logger.error(f"[REPORT] Monthly report failed: {e}")
+
             # --- Can we trade? (Risk Manager check, includes daily limit) ---
             if not risk.can_trade():
                 time.sleep(config.SCAN_INTERVAL_SECONDS)
                 continue
+
+            # --- Dry Run: Check open virtual trades for SL/TP ---
+            if dry_tracker:
+                dry_tracker.check_trades()
 
             # --- Scan each symbol for signals ---
             open_positions = mt5_bridge.get_open_positions()
@@ -170,6 +405,11 @@ def main():
             _manage_checkpoints(open_positions)
             
             open_symbols = [p.symbol for p in open_positions]
+
+            # In dry run mode, also consider virtual open trades
+            if dry_tracker:
+                dry_open_symbols = dry_tracker.get_open_symbols()
+                open_symbols = list(set(open_symbols + dry_open_symbols))
 
             for symbol in config.SYMBOLS:
                 # Double-check risk before each symbol
@@ -218,6 +458,23 @@ def main():
                         f"(Session: {session}, Reason: {signal.reason}, "
                         f"RR: {signal.rr_ratio:.2f})"
                     )
+
+                    # --- Register in dry run tracker ---
+                    if config.DRY_RUN and dry_tracker and ticket == -1:
+                        price = mt5_bridge.get_current_price(signal.symbol)
+                        entry = price["ask"] if signal.direction == "BUY" else price["bid"]
+                        virtual_ticket = dry_tracker.open_trade(
+                            symbol=signal.symbol,
+                            direction=signal.direction,
+                            entry_price=entry,
+                            stop_loss=signal.stop_loss,
+                            take_profit=signal.take_profit,
+                            lot_size=lot_size,
+                            session=session,
+                            reason=signal.reason,
+                            rr_ratio=signal.rr_ratio,
+                        )
+                        ticket = virtual_ticket  # Use virtual ticket for notification
 
                     # --- Telegram notification: trade opened ---
                     telegram_notifier.notify_trade_opened(

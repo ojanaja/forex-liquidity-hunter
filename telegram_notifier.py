@@ -16,8 +16,9 @@ Setup:
   3. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in your .env file
 """
 import logging
+import os
 import threading
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional
 
 import requests
@@ -69,6 +70,56 @@ def _send_message(text: str, parse_mode: str = "HTML") -> bool:
         thread.start()
     except (RuntimeError, KeyboardInterrupt):
         # Python is shutting down — try synchronous send as last resort
+        try:
+            _do_send()
+        except Exception:
+            pass
+    return True
+
+
+def _send_document(file_path: str, caption: str = "", parse_mode: str = "HTML") -> bool:
+    """
+    Send a document (PDF, etc.) to the configured Telegram chat.
+    Runs in a background thread.
+    """
+    token = getattr(config, "TELEGRAM_BOT_TOKEN", "")
+    chat_id = getattr(config, "TELEGRAM_CHAT_ID", "")
+
+    if not token or not chat_id:
+        logger.debug("Telegram not configured. Skipping document send.")
+        return False
+
+    if not os.path.exists(file_path):
+        logger.warning(f"Document not found: {file_path}")
+        return False
+
+    def _do_send():
+        try:
+            url = f"https://api.telegram.org/bot{token}/sendDocument"
+            data = {
+                "chat_id": chat_id,
+                "parse_mode": parse_mode,
+            }
+            if caption:
+                data["caption"] = caption[:1024]  # Telegram caption limit
+
+            with open(file_path, "rb") as f:
+                files = {"document": (os.path.basename(file_path), f)}
+                resp = requests.post(url, data=data, files=files, timeout=30)
+
+            if resp.status_code == 200:
+                logger.debug(f"Telegram document sent: {file_path}")
+            else:
+                logger.warning(
+                    f"Telegram document send failed: HTTP {resp.status_code} — {resp.text}"
+                )
+        except Exception as e:
+            logger.warning(f"Telegram document send error: {e}")
+
+    try:
+        thread = threading.Thread(target=_do_send, daemon=True)
+        thread.start()
+    except (RuntimeError, KeyboardInterrupt):
         try:
             _do_send()
         except Exception:
@@ -284,3 +335,132 @@ def notify_checkpoint_hit(
 
     _send_message(text)
     logger.info(f"[TELEGRAM] Checkpoint {checkpoint_name} notification for {symbol}")
+
+
+# ===========================================================================
+# Scheduled Report Notifications
+# ===========================================================================
+
+def notify_daily_report(pdf_path: str, stats: dict, report_date: date):
+    """Send daily trade report summary + PDF attachment to Telegram."""
+    if not getattr(config, "ENABLE_TELEGRAM", False):
+        return
+
+    mode = "🧪 DRY RUN" if config.DRY_RUN else "🔥 LIVE"
+    total = stats.get("total_trades", 0)
+    wins = stats.get("wins", 0)
+    losses = stats.get("losses", 0)
+    win_rate = stats.get("win_rate", 0)
+    pnl = stats.get("total_pnl", 0)
+    pnl_emoji = "📈" if pnl >= 0 else "📉"
+
+    text = (
+        f"📋 <b>DAILY TRADE REPORT</b> 📋\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📅 {report_date.strftime('%A, %B %d, %Y')}\n"
+        f"🏷 Mode: {mode}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 Trades: {total} (W:{wins} / L:{losses})\n"
+        f"🎯 Win Rate: {win_rate:.1f}%\n"
+        f"{pnl_emoji} Net P/L: <b>${pnl:+.2f}</b>\n"
+        f"📐 Avg RR: {stats.get('avg_rr_achieved', 0):.2f}\n"
+        f"📊 Profit Factor: {stats.get('profit_factor', '—')}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📎 Full report attached as PDF\n"
+        f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+
+    _send_message(text)
+
+    # Send PDF document
+    if pdf_path and os.path.exists(pdf_path):
+        caption = f"📋 Daily Report — {report_date.isoformat()} | {mode}"
+        _send_document(pdf_path, caption)
+
+    logger.info(f"[TELEGRAM] Daily report sent for {report_date}")
+
+
+def notify_weekly_report(pdf_path: str, stats: dict, week_start: date, week_end: date):
+    """Send weekly trade report summary + PDF attachment to Telegram."""
+    if not getattr(config, "ENABLE_TELEGRAM", False):
+        return
+
+    mode = "🧪 DRY RUN" if config.DRY_RUN else "🔥 LIVE"
+    iso_year, iso_week, _ = week_start.isocalendar()
+    total = stats.get("total_trades", 0)
+    wins = stats.get("wins", 0)
+    losses = stats.get("losses", 0)
+    win_rate = stats.get("win_rate", 0)
+    pnl = stats.get("total_pnl", 0)
+    pnl_emoji = "📈" if pnl >= 0 else "📉"
+
+    text = (
+        f"📊 <b>WEEKLY TRADE REPORT</b> 📊\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📅 Week {iso_week}, {iso_year}\n"
+        f"📆 {week_start.strftime('%b %d')} — {week_end.strftime('%b %d, %Y')}\n"
+        f"🏷 Mode: {mode}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 Trades: {total} (W:{wins} / L:{losses})\n"
+        f"🎯 Win Rate: {win_rate:.1f}%\n"
+        f"{pnl_emoji} Weekly P/L: <b>${pnl:+.2f}</b>\n"
+        f"📐 Avg RR: {stats.get('avg_rr_achieved', 0):.2f}\n"
+        f"📊 Profit Factor: {stats.get('profit_factor', '—')}\n"
+        f"📉 Max Drawdown: ${stats.get('max_drawdown', 0):.2f}\n"
+        f"🔥 Best Streak: {stats.get('longest_win_streak', 0)} wins\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📎 Full report attached as PDF\n"
+        f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+
+    _send_message(text)
+
+    if pdf_path and os.path.exists(pdf_path):
+        caption = f"📊 Weekly Report — W{iso_week} {iso_year} | {mode}"
+        _send_document(pdf_path, caption)
+
+    logger.info(f"[TELEGRAM] Weekly report sent for W{iso_week} {iso_year}")
+
+
+def notify_monthly_report(
+    pdf_path: str, stats: dict, report_month: int, report_year: int
+):
+    """Send monthly trade report summary + PDF attachment to Telegram."""
+    if not getattr(config, "ENABLE_TELEGRAM", False):
+        return
+
+    mode = "🧪 DRY RUN" if config.DRY_RUN else "🔥 LIVE"
+    month_name = date(report_year, report_month, 1).strftime("%B %Y")
+    total = stats.get("total_trades", 0)
+    wins = stats.get("wins", 0)
+    losses = stats.get("losses", 0)
+    win_rate = stats.get("win_rate", 0)
+    pnl = stats.get("total_pnl", 0)
+    pnl_emoji = "📈" if pnl >= 0 else "📉"
+
+    text = (
+        f"📈 <b>MONTHLY TRADE REPORT</b> 📈\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📅 {month_name}\n"
+        f"🏷 Mode: {mode}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 Trades: {total} (W:{wins} / L:{losses})\n"
+        f"🎯 Win Rate: {win_rate:.1f}%\n"
+        f"{pnl_emoji} Monthly P/L: <b>${pnl:+.2f}</b>\n"
+        f"📐 Avg RR: {stats.get('avg_rr_achieved', 0):.2f}\n"
+        f"📊 Profit Factor: {stats.get('profit_factor', '—')}\n"
+        f"📉 Max Drawdown: ${stats.get('max_drawdown', 0):.2f}\n"
+        f"🔥 Win Streak: {stats.get('longest_win_streak', 0)} | "
+        f"💀 Loss Streak: {stats.get('longest_loss_streak', 0)}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📎 Full report attached as PDF\n"
+        f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+
+    _send_message(text)
+
+    if pdf_path and os.path.exists(pdf_path):
+        caption = f"📈 Monthly Report — {month_name} | {mode}"
+        _send_document(pdf_path, caption)
+
+    logger.info(f"[TELEGRAM] Monthly report sent for {month_name}")
