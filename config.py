@@ -45,7 +45,7 @@ HTF_STRUCTURE_LOOKBACK = 20       # Candles to detect HH/HL/LH/LL
 # LTF CONFIRMATION (Req #2)
 # =============================================================================
 LTF_TIMEFRAME_MINUTES = 5        # M5 for entry timing
-MIN_CONFIRMATIONS = 4        # Require full quant confluence for higher win quality
+MIN_CONFIRMATIONS = 3        # Lowered from 4 — capture more valid trades
 
 # =============================================================================
 # SIDEWAYS DETECTION (Req #3) — ATR + Bollinger Band Squeeze
@@ -114,7 +114,7 @@ QUANT_W_VOL_PENALTY = 0.25
 
 QUANT_SCORE_ENTRY_THRESHOLD = 0.43
 QUANT_ATR_SL_MULTIPLIER = 2.2
-QUANT_TP_R_MULTIPLIER = 2.2
+QUANT_TP_R_MULTIPLIER = 2.0
 
 # Optional per-symbol overrides for quant parameters.
 # Use exact symbol names from SYMBOLS.
@@ -154,8 +154,8 @@ EW_LOOKBACK_BARS = 120      # M15 bars to analyze (120 × 15min = 30h)
 EW_MAX_SL_PIPS = 50.0     # Max SL for EW trades
 
 # --- Minimum Risk Reward (Req #7) ---
-# Minimum 1:1.8 RR required
-MIN_RISK_REWARD_RATIO = 1.8
+# Minimum 1:1.6 RR required
+MIN_RISK_REWARD_RATIO = 1.6
 
 # --- Minimum Factor Strengths (blocks weak/marginal signals) ---
 QUANT_MIN_TREND_STRENGTH = 0.0     # Disabled — was too strict
