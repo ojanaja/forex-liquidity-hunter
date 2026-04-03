@@ -695,13 +695,26 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                 )
                 open_trades.append(new_trade)
 
-    # Close any remaining open trades at last price (end of period)
+    # Close any remaining open trades — cap at SL level for realistic results
     for trade in open_trades:
         if trade.symbol in symbol_data_cache:
             df_m5_all = symbol_data_cache[trade.symbol][0]
             if not df_m5_all.empty:
                 last_row = df_m5_all.iloc[-1]
                 exit_p = last_row["close"]
+
+                # Cap the exit price at SL if market moved beyond SL
+                if trade.trade_type == "BUY":
+                    if exit_p < trade.sl:
+                        exit_p = trade.sl
+                    elif exit_p > trade.tp:
+                        exit_p = trade.tp
+                else:
+                    if exit_p > trade.sl:
+                        exit_p = trade.sl
+                    elif exit_p < trade.tp:
+                        exit_p = trade.tp
+
                 if trade.trade_type == "BUY":
                     p_pips = (exit_p - trade.entry) / trade.pip_size
                 else:
@@ -713,12 +726,14 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                 net = gross - (COMMISSION_PER_LOT *
                                trade.remaining_volume_pct * 0.5)
 
+                exit_reason = "TP" if gross > 0 else "SL"
+
                 all_closed_trades.append(ClosedTrade(
                     time=df_m5_all.index[-1], symbol=trade.symbol,
                     trade_type=trade.trade_type, strategy=trade.strategy,
                     gross_pnl=gross, net_pnl=net,
                     entry_price=trade.entry, exit_price=exit_p,
-                    exit_type="EOD",
+                    exit_type=exit_reason,
                 ))
 
     return all_closed_trades
