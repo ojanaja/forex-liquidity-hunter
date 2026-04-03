@@ -368,15 +368,6 @@ def _build_quant_signal(symbol: str, pip_size: float) -> Optional[Signal]:
     if avg_range > 0 and current_range > 2.5 * avg_range:
         return None
 
-    # ── Strategy Filter 3: EMA Slope Validation ──
-    ema_now = float(ema_fast.iloc[-1])
-    ema_5ago = float(ema_fast.iloc[-6]) if len(ema_fast) >= 6 else ema_now
-    ema_slope = ema_now - ema_5ago
-    if direction == "BUY" and ema_slope <= 0:
-        return None
-    if direction == "SELL" and ema_slope >= 0:
-        return None
-
     entry = prices["ask"] if direction == "BUY" else prices["bid"]
 
     sl_atr = float(_quant_param(

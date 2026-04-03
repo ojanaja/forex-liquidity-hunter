@@ -552,19 +552,17 @@ def validate_entry(
             if not corr_ok:
                 return False, corr_reason
 
-        # --- H1 Momentum Alignment (2 of 3 candles) ---
+        # --- H1 Momentum Alignment ---
         h1_df = mt5_bridge.get_ohlc(
-            symbol, timeframe_minutes=config.HTF_TIMEFRAME_MINUTES, count=5)
-        if h1_df is not None and len(h1_df) >= 3:
-            h1_last3 = h1_df.tail(3)
-            if direction == "BUY":
-                h1_support = int((h1_last3["close"] > h1_last3["open"]).sum())
-            else:
-                h1_support = int((h1_last3["close"] < h1_last3["open"]).sum())
-            if h1_support < 2:
+            symbol, timeframe_minutes=config.HTF_TIMEFRAME_MINUTES, count=3)
+        if h1_df is not None and len(h1_df) >= 1:
+            h1_candle = h1_df.iloc[-1]
+            h1_bullish = h1_candle["close"] > h1_candle["open"]
+            if (direction == "BUY" and not h1_bullish) or \
+               (direction == "SELL" and h1_bullish):
                 return False, (
-                    f"H1 momentum weak: only {h1_support}/3 candles "
-                    f"support {direction}"
+                    f"H1 momentum misaligned: candle is "
+                    f"{'bullish' if h1_bullish else 'bearish'} vs {direction}"
                 )
 
         conditions_msg = (

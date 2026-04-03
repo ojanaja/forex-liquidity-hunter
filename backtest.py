@@ -382,16 +382,6 @@ def detect_quant_signal_bt(df_m5: pd.DataFrame, ts, symbol: str, pip_size: float
     if avg_range > 0 and current_range > 2.5 * avg_range:
         return None
 
-    # ── Strategy Filter 3: EMA Slope Validation ──
-    # Fast EMA must be moving in signal direction (rising for BUY, falling for SELL)
-    ema_now = float(ema_fast.iloc[-1])
-    ema_5ago = float(ema_fast.iloc[-6]) if len(ema_fast) >= 6 else ema_now
-    ema_slope = ema_now - ema_5ago
-    if direction == "BUY" and ema_slope <= 0:
-        return None
-    if direction == "SELL" and ema_slope >= 0:
-        return None
-
     entry = float(close.iloc[-1])
     sl_dist = max(float(_qparam(symbol, "QUANT_ATR_SL_MULTIPLIER", 1.8)) * float(atr),
                   (getattr(config, "MIN_SL_PIPS_XAU", 50.0) if "XAU" in symbol else getattr(config, "MIN_SL_PIPS", 15.0)) * pip_size)
@@ -669,16 +659,15 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                     dx["confirm_fail"] += 1
                     signal = None
 
-            # --- Strategy Filter 3: H1 Momentum Alignment (2 of 3) ---
-            # At least 2 of last 3 H1 candles must close in signal direction
+            # --- Strategy Filter 3: H1 Momentum Alignment ---
+            # Current H1 candle must close in signal direction
             if signal is not None:
-                h1_at_entry = df_h1.loc[:ts].tail(3)
-                if len(h1_at_entry) >= 3:
-                    if signal["type"] == "BUY":
-                        h1_support = int((h1_at_entry["close"] > h1_at_entry["open"]).sum())
-                    else:
-                        h1_support = int((h1_at_entry["close"] < h1_at_entry["open"]).sum())
-                    if h1_support < 2:
+                h1_at_entry = df_h1.loc[:ts].tail(2)
+                if len(h1_at_entry) >= 1:
+                    h1_candle = h1_at_entry.iloc[-1]
+                    h1_bullish = h1_candle["close"] > h1_candle["open"]
+                    if (signal["type"] == "BUY" and not h1_bullish) or \
+                       (signal["type"] == "SELL" and h1_bullish):
                         dx["h1_block"] = dx.get("h1_block", 0) + 1
                         signal = None
 
