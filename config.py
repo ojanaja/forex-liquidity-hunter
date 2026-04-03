@@ -104,7 +104,7 @@ QUANT_ZSCORE_WINDOW = 80
 
 QUANT_VOL_SHORT_WINDOW = 24
 QUANT_VOL_LONG_WINDOW = 96
-QUANT_MAX_VOL_RATIO = 1.05
+QUANT_MAX_VOL_RATIO = 1.10
 QUANT_REQUIRE_TREND_MOM_ALIGNMENT = True
 
 QUANT_W_TREND = 0.45
@@ -112,7 +112,7 @@ QUANT_W_MOMENTUM = 0.35
 QUANT_W_MEAN_REVERSION = 0.20
 QUANT_W_VOL_PENALTY = 0.25
 
-QUANT_SCORE_ENTRY_THRESHOLD = 0.52
+QUANT_SCORE_ENTRY_THRESHOLD = 0.45
 QUANT_ATR_SL_MULTIPLIER = 2.2
 QUANT_TP_R_MULTIPLIER = 2.2
 
@@ -124,21 +124,21 @@ QUANT_SYMBOL_OVERRIDES = {
         "QUANT_W_MOMENTUM": 0.25,
         "QUANT_W_MEAN_REVERSION": 0.20,
         "QUANT_W_VOL_PENALTY": 0.40,
-        "QUANT_SCORE_ENTRY_THRESHOLD": 0.58,
+        "QUANT_SCORE_ENTRY_THRESHOLD": 0.52,
         "QUANT_ATR_SL_MULTIPLIER": 2.8,
-        "QUANT_MAX_VOL_RATIO": 0.95,
+        "QUANT_MAX_VOL_RATIO": 1.00,
     },
     "GBPJPYx": {
         "QUANT_W_TREND": 0.50,
         "QUANT_W_MOMENTUM": 0.35,
         "QUANT_W_MEAN_REVERSION": 0.15,
-        "QUANT_SCORE_ENTRY_THRESHOLD": 0.55,
+        "QUANT_SCORE_ENTRY_THRESHOLD": 0.48,
         "QUANT_W_VOL_PENALTY": 0.35,
-        "QUANT_MAX_VOL_RATIO": 1.00,
+        "QUANT_MAX_VOL_RATIO": 1.05,
     },
     "EURGBPx": {
-        "QUANT_SCORE_ENTRY_THRESHOLD": 0.55,
-        "QUANT_MAX_VOL_RATIO": 0.95,
+        "QUANT_SCORE_ENTRY_THRESHOLD": 0.50,
+        "QUANT_MAX_VOL_RATIO": 1.00,
     },
 }
 
@@ -165,8 +165,8 @@ EW_MAX_SL_PIPS = 50.0     # Max SL for EW trades
 MIN_RISK_REWARD_RATIO = 2.0
 
 # --- Minimum Factor Strengths (blocks weak/marginal signals) ---
-QUANT_MIN_TREND_STRENGTH = 0.15    # Min |trend_factor| to consider
-QUANT_MIN_MOM_ZSCORE = 0.3         # Min |momentum z-score| to consider
+QUANT_MIN_TREND_STRENGTH = 0.08    # Min |trend_factor| to consider
+QUANT_MIN_MOM_ZSCORE = 0.15         # Min |momentum z-score| to consider
 
 # =============================================================================
 # BREAKEVEN + PARTIAL TP SYSTEM
