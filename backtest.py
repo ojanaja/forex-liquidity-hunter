@@ -420,117 +420,6 @@ def detect_quant_signal_bt(df_m5: pd.DataFrame, ts, symbol: str, pip_size: float
     }
 
 
-def detect_momentum_signal_bt(df_m5: pd.DataFrame, ts, symbol: str,
-                               pip_size: float, df_h1: pd.DataFrame) -> dict | None:
-    """
-    Momentum breakout signal — catches strong directional moves.
-
-    Fires when:
-    1. Price closes above 20-bar high (BUY) or below 20-bar low (SELL)
-    2. Current candle is strong (body > 60% of range)
-    3. Candle closes in breakout direction
-    4. Volume is above average
-    5. H1 candle aligns with direction
-    6. No volatility spike
-    """
-    m5_slice = df_m5.loc[:ts].tail(50)
-    if len(m5_slice) < 30:
-        return None
-
-    close = m5_slice["close"]
-    high = m5_slice["high"]
-    low = m5_slice["low"]
-
-    # 20-bar high/low (excluding current bar)
-    recent_high = float(high.iloc[-21:-1].max())
-    recent_low = float(low.iloc[-21:-1].min())
-
-    current = m5_slice.iloc[-1]
-    c_close = float(current["close"])
-    c_open = float(current["open"])
-    c_high = float(current["high"])
-    c_low = float(current["low"])
-
-    # Check breakout
-    direction = None
-    if c_close > recent_high:
-        direction = "BUY"
-    elif c_close < recent_low:
-        direction = "SELL"
-
-    if direction is None:
-        return None
-
-    # Strong candle check (body > 60% of range)
-    body = abs(c_close - c_open)
-    candle_range = c_high - c_low
-    if candle_range <= 0 or body / candle_range < 0.60:
-        return None
-
-    # Candle must close in direction
-    if direction == "BUY" and c_close <= c_open:
-        return None
-    if direction == "SELL" and c_close >= c_open:
-        return None
-
-    # Volume confirmation (above average)
-    if "tick_volume" in m5_slice.columns and len(m5_slice) >= 20:
-        avg_vol = float(m5_slice["tick_volume"].iloc[-20:-1].mean())
-        curr_vol = float(m5_slice["tick_volume"].iloc[-1])
-        if avg_vol > 0 and curr_vol < avg_vol * 1.2:
-            return None
-
-    # H1 alignment (built into signal, not just the main loop)
-    h1_slice = df_h1.loc[:ts].tail(2)
-    if len(h1_slice) >= 1:
-        h1_candle = h1_slice.iloc[-1]
-        h1_bullish = h1_candle["close"] > h1_candle["open"]
-        if (direction == "BUY" and not h1_bullish) or \
-           (direction == "SELL" and h1_bullish):
-            return None
-
-    # Volatility spike rejection (don't enter on extreme outlier candles)
-    avg_range = float((high - low).iloc[-20:-1].mean())
-    if avg_range > 0 and candle_range > 3.0 * avg_range:
-        return None
-
-    # ATR for SL/TP
-    prev_close = close.shift(1)
-    tr = pd.concat([
-        m5_slice["high"] - m5_slice["low"],
-        (m5_slice["high"] - prev_close).abs(),
-        (m5_slice["low"] - prev_close).abs(),
-    ], axis=1).max(axis=1)
-    atr = tr.rolling(window=14).mean().iloc[-1]
-    if pd.isna(atr) or atr <= 0:
-        return None
-
-    entry = c_close
-    sl_mult = float(_qparam(symbol, "QUANT_ATR_SL_MULTIPLIER", 2.2))
-    sl_dist = max(
-        sl_mult * float(atr),
-        (getattr(config, "MIN_SL_PIPS_XAU", 60.0) if "XAU" in symbol
-         else getattr(config, "MIN_SL_PIPS", 20.0)) * pip_size,
-    )
-    rr = float(_qparam(symbol, "QUANT_TP_R_MULTIPLIER", config.TP_RATIO))
-
-    if direction == "BUY":
-        sl = entry - sl_dist
-        tp = entry + (sl_dist * rr)
-    else:
-        sl = entry + sl_dist
-        tp = entry - (sl_dist * rr)
-
-    return {
-        "type": direction,
-        "entry": entry,
-        "sl": sl,
-        "tp": tp,
-        "strategy": "MOMENTUM",
-        "confirmations": 3,
-    }
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # NEWS FILTER (Static Schedule Simulation for Backtest)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -726,7 +615,7 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                 continue
 
             # ── Session window check ──
-            in_window = ("13:00" <= t_str <= "18:00") or (
+            in_window = ("14:00" <= t_str <= "18:00") or (
                 "19:00" <= t_str <= "23:00")
             if not in_window:
                 continue
@@ -760,34 +649,19 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
 
             # Quant signal
             signal = detect_quant_signal_bt(df_m5, ts, symbol, pip_size)
-
-            # Fallback: Momentum breakout signal
-            if signal is None:
-                signal = detect_momentum_signal_bt(
-                    df_m5, ts, symbol, pip_size, df_h1)
-
             if signal is None:
                 dx["no_signal"] += 1
-                continue
 
-            # Confirmation check (quant only — momentum has built-in confirms)
-            if signal.get("strategy") == "QUANT":
+            if signal is not None:
                 required_confirms = getattr(
                     config, "QUANT_MIN_CONFIRMATIONS", config.MIN_CONFIRMATIONS)
                 if signal.get("confirmations", 0) < required_confirms:
                     dx["confirm_fail"] += 1
                     signal = None
 
-            # HTF direction alignment — signal must match trend
+            # --- Strategy Filter 3: H1 Momentum Alignment ---
+            # Current H1 candle must close in signal direction
             if signal is not None:
-                if (signal["type"] == "BUY" and htf_trend == "DOWNTREND") or \
-                   (signal["type"] == "SELL" and htf_trend == "UPTREND"):
-                    dx["htf_direction_block"] = dx.get("htf_direction_block", 0) + 1
-                    signal = None
-
-            # --- Strategy Filter: H1 Momentum Alignment (quant only) ---
-            # Momentum signal already checks H1 internally
-            if signal is not None and signal.get("strategy") == "QUANT":
                 h1_at_entry = df_h1.loc[:ts].tail(2)
                 if len(h1_at_entry) >= 1:
                     h1_candle = h1_at_entry.iloc[-1]
@@ -1282,8 +1156,6 @@ def run_backtest():
         f"  Impulse blocked:     {diagnostics.get('impulse_block', 0):>8}  (blocked)")
     print(
         f"  Confirm fail (<{config.MIN_CONFIRMATIONS}):  {diagnostics.get('confirm_fail', 0):>8}  (blocked)")
-    print(
-        f"  HTF direction block: {diagnostics.get('htf_direction_block', 0):>8}  (blocked)")
     print(
         f"  H1 momentum block:   {diagnostics.get('h1_block', 0):>8}  (blocked)")
     print(f"  Trades opened:       {diagnostics.get('trades_opened', 0):>8}")

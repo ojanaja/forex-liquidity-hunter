@@ -200,7 +200,7 @@ MAX_POSITIONS_PER_CORRELATION_GROUP = 1
 # SESSION WINDOWS (UTC+7 / WIB)
 # =============================================================================
 SESSIONS = [
-    ("London",  13,  0,  18,  0),   # 13:00 - 18:00 WIB
+    ("London",  14,  0,  18,  0),   # 14:00 - 18:00 WIB
     ("NewYork", 19,  0,  23,  0),   # 19:00 - 23:00 WIB
 ]
 TIMEZONE = "Asia/Jakarta"  # UTC+7
