@@ -23,8 +23,8 @@ ACCOUNT_BALANCE = 10000.0   # Actual current balance
 MAX_RISK_PER_TRADE_PCT = 0.5
 DAILY_LOSS_LIMIT = 100.0    # Stop if down $100 in a day
 TOTAL_LOSS_LIMIT = 200.0    # Hard stop
-PROFIT_TARGET = 600.0    # 6% monthly target
-DAILY_PROFIT_CAP = 200.0    # Consistency rule enforcement
+PROFIT_TARGET = 1000.0    # 10% monthly target
+DAILY_PROFIT_CAP = 300.0    # Consistency rule enforcement
 
 # =============================================================================
 # CONCURRENT TRADE LIMIT
@@ -200,8 +200,9 @@ MAX_POSITIONS_PER_CORRELATION_GROUP = 1
 # SESSION WINDOWS (UTC+7 / WIB)
 # =============================================================================
 SESSIONS = [
-    ("London",  13,  0,  18,  0),   # 13:00 - 18:00 WIB
-    ("NewYork", 19,  0,   0,  0),   # 19:00 - 00:00 WIB (extended)
+    ("Tokyo",    7,  0,  10,  0),   # 07:00 - 10:00 WIB (JPY pairs)
+    ("London",  12,  0,  18,  0),   # 12:00 - 18:00 WIB (extended start)
+    ("NewYork", 19,  0,   0,  0),   # 19:00 - 00:00 WIB
 ]
 TIMEZONE = "Asia/Jakarta"  # UTC+7
 
