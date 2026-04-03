@@ -200,9 +200,8 @@ MAX_POSITIONS_PER_CORRELATION_GROUP = 1
 # SESSION WINDOWS (UTC+7 / WIB)
 # =============================================================================
 SESSIONS = [
-    ("Tokyo",    7,  0,  10,  0),   # 07:00 - 10:00 WIB (JPY pairs)
-    ("London",  12,  0,  18,  0),   # 12:00 - 18:00 WIB (extended start)
-    ("NewYork", 19,  0,   0,  0),   # 19:00 - 00:00 WIB
+    ("London",  14,  0,  18,  0),   # 14:00 - 18:00 WIB
+    ("NewYork", 19,  0,  23,  0),   # 19:00 - 23:00 WIB
 ]
 TIMEZONE = "Asia/Jakarta"  # UTC+7
 
@@ -210,8 +209,8 @@ TIMEZONE = "Asia/Jakarta"  # UTC+7
 # TRADING PAIRS (Multi-Asset Global Selection)
 # =============================================================================
 SYMBOLS = [
-    "EURAUDx", "EURGBPx", "GBPUSDx", "GBPJPYx", "AUDUSDx", "XAUUSDx",
-    "AUDJPYx", "CADJPYx", "GBPNZDx", "AUDCADx", "EURJPYx", "AUDNZDx",
+    "EURAUDx", "EURGBPx", "GBPJPYx", "AUDUSDx", "XAUUSDx",
+    "AUDJPYx", "AUDCADx", "EURJPYx", "GBPNZDx",
 ]
 
 # =============================================================================

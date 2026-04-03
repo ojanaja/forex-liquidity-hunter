@@ -47,6 +47,45 @@ COMMISSION_PER_LOT = getattr(config, "ESTIMATED_COMMISSION_PER_LOT", 7.0)
 SPREAD_COST_PIPS = getattr(config, "ESTIMATED_SPREAD_COST_PIPS", 1.5)
 
 
+def _calc_h1_adx(df_h1, period=14):
+    """Calculate ADX on H1 data for regime detection.
+    ADX > 20 = trending market (safe to trade)
+    ADX < 20 = ranging market (stay out)"""
+    if df_h1 is None or len(df_h1) < period * 3:
+        return pd.Series(dtype=float)
+
+    high = df_h1['high'].astype(float)
+    low = df_h1['low'].astype(float)
+    close = df_h1['close'].astype(float)
+
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs()
+    ], axis=1).max(axis=1)
+
+    up = high - high.shift(1)
+    down = low.shift(1) - low
+
+    plus_dm = ((up > down) & (up > 0)).astype(float) * up
+    minus_dm = ((down > up) & (down > 0)).astype(float) * down
+
+    alpha = 1.0 / period
+    atr = tr.ewm(alpha=alpha, min_periods=period).mean()
+    smooth_plus = plus_dm.ewm(alpha=alpha, min_periods=period).mean()
+    smooth_minus = minus_dm.ewm(alpha=alpha, min_periods=period).mean()
+
+    plus_di = 100.0 * smooth_plus / atr
+    minus_di = 100.0 * smooth_minus / atr
+
+    di_sum = plus_di + minus_di
+    di_sum = di_sum.replace(0, float('nan'))
+    dx = 100.0 * (plus_di - minus_di).abs() / di_sum
+    adx = dx.ewm(alpha=alpha, min_periods=period).mean()
+    return adx
+
+
 # ─── Data Classes ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -371,7 +410,7 @@ def detect_quant_signal_bt(df_m5: pd.DataFrame, ts, symbol: str, pip_size: float
         trend_support = float((last_10_close > last_10_ema).sum()) / 10.0
     else:
         trend_support = float((last_10_close < last_10_ema).sum()) / 10.0
-    if trend_support < 0.50:
+    if trend_support < 0.60:
         return None
 
     # ── Strategy Filter 2: Volatility Spike Rejection ──
@@ -524,6 +563,11 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                 "trades_opened", "concurrent_block", "news_blackout"]:
         dx.setdefault(key, 0)
 
+    # Pre-compute H1 ADX for each symbol
+    adx_cache = {}
+    for symbol, (_, df_h1_all, _) in symbol_data_cache.items():
+        adx_cache[symbol] = _calc_h1_adx(df_h1_all)
+
     for symbol, (df_m5_all, df_h1_all, df_m15_all) in symbol_data_cache.items():
         info = mt5.symbol_info(symbol)
         if not info:
@@ -615,9 +659,8 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                 continue
 
             # ── Session window check ──
-            in_window = ("07:00" <= t_str <= "10:00") or \
-                ("12:00" <= t_str <= "18:00") or \
-                ("19:00" <= t_str <= "23:59")
+            in_window = ("14:00" <= t_str <= "18:00") or \
+                ("19:00" <= t_str <= "23:00")
             if not in_window:
                 continue
 
@@ -631,6 +674,17 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
             if _check_news_blackout_bt(ts, symbol):
                 dx["news_blackout"] += 1
                 continue
+
+            # 0.5 ADX Regime Filter - THE KEY FIX
+            # Only trade when H1 ADX > 20 (trending market)
+            adx_series = adx_cache.get(symbol)
+            if adx_series is not None and len(adx_series) > 0:
+                adx_at = adx_series.loc[:ts]
+                if len(adx_at) > 0:
+                    current_adx = float(adx_at.iloc[-1])
+                    if pd.isna(current_adx) or current_adx < 20:
+                        dx["adx_block"] = dx.get("adx_block", 0) + 1
+                        continue
 
             # 1. HTF Trend
             htf_trend = compute_htf_trend(df_h1, ts)
@@ -1159,6 +1213,8 @@ def run_backtest():
     print(f"  In session window:   {diagnostics.get('in_session', 0):>8}")
     print(
         f"  News blackout:       {diagnostics.get('news_blackout', 0):>8}  (blocked)")
+    print(
+        f"  ADX < 20 (ranging):  {diagnostics.get('adx_block', 0):>8}  (blocked)")
     print(
         f"  HTF = SIDEWAYS:      {diagnostics.get('htf_sideways', 0):>8}  (blocked)")
     print(

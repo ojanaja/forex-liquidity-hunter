@@ -541,6 +541,30 @@ def validate_entry(
                 f"Insufficient quant confirmations: {confirms}/{config.MIN_CONFIRMATIONS}"
             )
 
+        # ADX Regime Filter - only trade trending markets
+        h1_df_adx = mt5_bridge.get_ohlc(
+            symbol, timeframe_minutes=config.HTF_TIMEFRAME_MINUTES, count=60)
+        if h1_df_adx is not None and len(h1_df_adx) >= 42:
+            high = h1_df_adx['high'].astype(float)
+            low = h1_df_adx['low'].astype(float)
+            close_h1 = h1_df_adx['close'].astype(float)
+            prev_c = close_h1.shift(1)
+            tr = pd.concat([high - low, (high - prev_c).abs(), (low - prev_c).abs()], axis=1).max(axis=1)
+            up = high - high.shift(1)
+            down = low.shift(1) - low
+            plus_dm = ((up > down) & (up > 0)).astype(float) * up
+            minus_dm = ((down > up) & (down > 0)).astype(float) * down
+            alpha = 1.0 / 14
+            atr_s = tr.ewm(alpha=alpha, min_periods=14).mean()
+            pdi = 100 * plus_dm.ewm(alpha=alpha, min_periods=14).mean() / atr_s
+            mdi = 100 * minus_dm.ewm(alpha=alpha, min_periods=14).mean() / atr_s
+            di_sum = pdi + mdi
+            di_sum = di_sum.replace(0, float('nan'))
+            dx = 100 * (pdi - mdi).abs() / di_sum
+            adx_val = float(dx.ewm(alpha=alpha, min_periods=14).mean().iloc[-1])
+            if pd.isna(adx_val) or adx_val < 20:
+                return False, f"ADX too low ({adx_val:.1f}) - market is ranging"
+
         if rr_ratio < config.MIN_RISK_REWARD_RATIO:
             return False, (
                 f"RR too low: {rr_ratio:.2f} (min {config.MIN_RISK_REWARD_RATIO})"
