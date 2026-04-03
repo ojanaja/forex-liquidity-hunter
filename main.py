@@ -1,6 +1,6 @@
 """
-Forex Liquidity Hunter — Main Runner (V18 Disciplined Trader)
-==============================================================
+Forex Liquidity Hunter — Main Runner (V19 Quant Trader)
+========================================================
 Entry point for the bot. Run on your Windows VPS:
     python main.py
 
@@ -9,7 +9,7 @@ Flow:
   2. Enter main loop
   3. Only scan for trades during session windows (Tokyo/London/NY)
   4. Enforce all discipline rules via RiskManager + MarketFilter
-  5. 6-point pre-entry validation gate
+    5. Quant pre-entry validation gate
   6. Auto break-even with commission/spread protection
   7. Log daily summary every 5 minutes
   8. Dry run: track virtual trades & detect SL/TP hits
@@ -34,6 +34,7 @@ import report_generator
 # ======================================================================
 # Logging Setup
 # ======================================================================
+
 
 def setup_logging():
     """Configure logging to both console and daily log file."""
@@ -103,7 +104,8 @@ def _send_daily_report(tracker, risk: RiskManager):
 
     if tracker:
         # Dry run mode: use tracker data
-        trades = tracker.get_closed_trades(start_date=yesterday, end_date=yesterday)
+        trades = tracker.get_closed_trades(
+            start_date=yesterday, end_date=yesterday)
         stats = tracker.get_stats(start_date=yesterday, end_date=yesterday)
         cumulative_pnl = sum(t.pnl for t in tracker.closed_trades)
     else:
@@ -114,10 +116,10 @@ def _send_daily_report(tracker, risk: RiskManager):
             "wins": risk.daily_wins,
             "losses": risk.daily_losses,
             "win_rate": (risk.daily_wins / risk.daily_trade_count * 100)
-                        if risk.daily_trade_count > 0 else 0,
+            if risk.daily_trade_count > 0 else 0,
             "total_pnl": risk.daily_realized_pnl,
             "avg_pnl_per_trade": (risk.daily_realized_pnl / risk.daily_trade_count)
-                                 if risk.daily_trade_count > 0 else 0,
+            if risk.daily_trade_count > 0 else 0,
             "pair_stats": {},
             "sl_count": 0,
             "tp_count": 0,
@@ -157,10 +159,12 @@ def _send_weekly_report(tracker, risk: RiskManager):
     week_end = today - timedelta(days=1)  # Yesterday (Sunday)
     week_start = week_end - timedelta(days=6)  # Last Monday
 
-    logger.info(f"[REPORT] Generating weekly report for {week_start} to {week_end}...")
+    logger.info(
+        f"[REPORT] Generating weekly report for {week_start} to {week_end}...")
 
     if tracker:
-        trades = tracker.get_closed_trades(start_date=week_start, end_date=week_end)
+        trades = tracker.get_closed_trades(
+            start_date=week_start, end_date=week_end)
         stats = tracker.get_stats(start_date=week_start, end_date=week_end)
         cumulative_pnl = sum(t.pnl for t in tracker.closed_trades)
     else:
@@ -202,7 +206,8 @@ def _send_monthly_report(tracker, risk: RiskManager):
     report_month = last_month_end.month
     report_year = last_month_end.year
 
-    logger.info(f"[REPORT] Generating monthly report for {report_year}-{report_month:02d}...")
+    logger.info(
+        f"[REPORT] Generating monthly report for {report_year}-{report_month:02d}...")
 
     if tracker:
         trades = tracker.get_closed_trades(
@@ -265,12 +270,12 @@ def main():
 
     logger.info(
         r"""
-  ╔═══════════════════════════════════════════════════╗
-  ║   FOREX LIQUIDITY HUNTER v1.8 (Disciplined)       ║
-  ║   SMC Sweep + Breakout + RSI Scalp                ║
-  ║   6-Point Validation Gate + Correlation Filter     ║
-  ║   Mode:     %s                              ║
-  ╚═══════════════════════════════════════════════════╝
+    ╔═══════════════════════════════════════════════════╗
+    ║   FOREX LIQUIDITY HUNTER v1.9 (Quant Trader)      ║
+    ║   Multi-Factor Model: Trend + Momentum + Vol      ║
+    ║   Statistical Gate + Correlation Filter            ║
+    ║   Mode:     %s                              ║
+    ╚═══════════════════════════════════════════════════╝
     """ % ('DRY RUN' if config.DRY_RUN else 'LIVE')
     )
 
@@ -317,7 +322,8 @@ def main():
     news_filter.log_upcoming_events()
 
     last_summary_time = time.time()
-    _symbol_cooldowns: dict[str, float] = {}  # Tracks last trade time per symbol
+    # Tracks last trade time per symbol
+    _symbol_cooldowns: dict[str, float] = {}
 
     # --- Report scheduler state ---
     last_daily_report_date: date | None = None
@@ -347,7 +353,7 @@ def main():
                 # Outside defined session hours
                 tz = pytz.timezone(config.TIMEZONE)
                 session = f"Global_{datetime.now(tz).strftime('%H')}"
-            
+
             logger.info(f"Scanning... [Session: {session}]")
 
             # === SCHEDULED REPORTS (check every cycle) ===
@@ -400,10 +406,10 @@ def main():
 
             # --- Scan each symbol for signals ---
             open_positions = mt5_bridge.get_open_positions()
-            
+
             # --- Checkpoint TP Manager (partial close + trailing) ---
             _manage_checkpoints(open_positions)
-            
+
             open_symbols = [p.symbol for p in open_positions]
 
             # In dry run mode, also consider virtual open trades
@@ -417,18 +423,19 @@ def main():
                     break
 
                 logger.info(f"Checking {symbol}...")
-                
+
                 # 1. Do we already have an open trade for this symbol?
                 if symbol in open_symbols:
                     continue
 
                 # 2. Is this symbol on cooldown?
                 last_trade_time = _symbol_cooldowns.get(symbol, 0)
-                cooldown_seconds = getattr(config, "TRADE_COOLDOWN_MINUTES", 15) * 60
+                cooldown_seconds = getattr(
+                    config, "TRADE_COOLDOWN_MINUTES", 15) * 60
                 if time.time() - last_trade_time < cooldown_seconds:
                     continue
 
-                # 3. Generate signal (includes full 6-point validation gate)
+                # 3. Generate signal (includes quant validation gate)
                 signal = generate_signal(symbol, risk_manager=risk)
 
                 if signal is None:
@@ -437,7 +444,8 @@ def main():
                 # --- Calculate lot size ---
                 lot_size = risk.calculate_lot_size(signal.sl_pips, symbol)
                 if lot_size is None:
-                    logger.warning(f"Could not calculate lot size for {symbol}. Skipping.")
+                    logger.warning(
+                        f"Could not calculate lot size for {symbol}. Skipping.")
                     continue
 
                 # --- Execute the trade ---
@@ -673,7 +681,8 @@ def _manage_checkpoints(open_positions):
         if sym_info is None:
             continue
 
-        pip_size = sym_info.point * 10 if sym_info.digits in (3, 5) else sym_info.point
+        pip_size = sym_info.point * \
+            10 if sym_info.digits in (3, 5) else sym_info.point
 
         # Calculate current R achieved
         if direction == "BUY":
@@ -702,9 +711,11 @@ def _manage_checkpoints(open_positions):
                 # --- Partial close ---
                 volume_closed = 0
                 if close_pct > 0:
-                    volume_to_close = round(state["original_volume"] * close_pct, 2)
+                    volume_to_close = round(
+                        state["original_volume"] * close_pct, 2)
                     if volume_to_close >= 0.01:
-                        mt5_bridge.partial_close_position(p.ticket, volume_to_close)
+                        mt5_bridge.partial_close_position(
+                            p.ticket, volume_to_close)
                         volume_closed = volume_to_close
                         logger.info(
                             f"[CHECKPOINT] {cp_name}: Closed {close_pct*100:.0f}% "
@@ -715,7 +726,8 @@ def _manage_checkpoints(open_positions):
                 new_sl = 0
                 if i == 0:
                     # First checkpoint: SL to Break-Even + commission/spread buffer
-                    be_buffer = _calc_be_buffer(sym_info, state["original_volume"], pip_size)
+                    be_buffer = _calc_be_buffer(
+                        sym_info, state["original_volume"], pip_size)
                     if direction == "BUY":
                         new_sl = state["entry_price"] + be_buffer
                     else:
@@ -802,7 +814,8 @@ def _manage_checkpoints(open_positions):
     closed_tickets = set(_checkpoint_state.keys()) - active_tickets
     for ticket in closed_tickets:
         del _checkpoint_state[ticket]
-        logger.debug(f"[CHECKPOINT] Cleaned up state for closed ticket {ticket}")
+        logger.debug(
+            f"[CHECKPOINT] Cleaned up state for closed ticket {ticket}")
 
 
 # ======================================================================

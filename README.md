@@ -2,9 +2,15 @@
 
 A Python-based scalping bot for **WeMasterTrade 10k prop firm accounts** using MetaTrader 5.
 
-## Strategy: Session Liquidity Sweep
+## Strategy: Quant Multi-Factor Trader
 
-The bot identifies **liquidity grabs** (fakeout sweeps) at the open of major forex sessions, then trades the **reversal**. It targets the Asia High/Low being swept at the London or New York open.
+The bot uses a **quantitative signal engine**, not retail pattern-only entries. Every trade candidate is generated from mathematical and statistical factors:
+- **Trend factor**: EMA spread normalized by ATR
+- **Momentum factor**: short-vs-long return spread z-score
+- **Mean-reversion factor**: deviation from rolling fair-value mean
+- **Volatility regime control**: penalizes unstable high-volatility states
+
+Signals are then validated by risk, correlation, and market regime filters before execution.
 
 ## ⚡ Quick Start (Windows Laptop)
 
@@ -71,7 +77,7 @@ forex-liquidity-hunter/
 ├── config.py          # All tunable parameters
 ├── mt5_bridge.py      # MetaTrader 5 communication
 ├── risk_manager.py    # Prop firm rule enforcement
-├── strategy.py        # Liquidity Sweep detection
+├── strategy.py        # Quant multi-factor signal engine
 ├── requirements.txt   # Python dependencies
 ├── .env.example       # Template for MT5 credentials
 ├── .gitignore
@@ -90,9 +96,35 @@ All parameters are in `config.py`. Key settings:
 | `MAX_RISK_PER_TRADE_PCT` | `0.5` | Risk per trade (% of balance) |
 | `DAILY_PROFIT_CAP` | `120` | Max daily profit before stopping |
 | `DAILY_LOSS_LIMIT` | `150` | Max daily loss before stopping |
-| `SWEEP_THRESHOLD_PIPS` | `3.0` | Min pips beyond range for a valid sweep |
-| `TP_RATIO` | `1.5` | Take Profit as multiple of Stop Loss |
-| `SCAN_INTERVAL_SECONDS` | `15` | How often to check for signals |
+| `ENABLE_ONLY_QUANT` | `True` | Use quant engine only (disable retail modules) |
+| `QUANT_SCORE_ENTRY_THRESHOLD` | `0.20` | Minimum absolute factor score to open a trade |
+| `QUANT_ATR_SL_MULTIPLIER` | `1.8` | Stop Loss distance in ATR units |
+| `QUANT_TP_R_MULTIPLIER` | `2.0` | Take Profit multiple of risk distance |
+| `QUANT_SYMBOL_OVERRIDES` | `{...}` | Pair-specific factor weights and threshold overrides |
+| `SCAN_INTERVAL_SECONDS` | `10` | How often to check for signals |
+
+## Walk-Forward Calibration
+
+To calibrate quant settings using rolling train/test windows:
+
+```powershell
+python quant_walkforward.py
+```
+
+Output:
+- Console summary per symbol (recommended threshold, test mean return, sharpe-like score)
+- Ready-to-paste `QUANT_SYMBOL_OVERRIDES` block
+- JSON report at `logs/walkforward_quant_report.json`
+
+If MT5 is unavailable (for example on macOS), the script automatically uses CSV fallback from `QUANT_CSV_DATA_DIR` (default: `data`).
+
+Supported filenames:
+- `data/<SYMBOL>_M5.csv`
+- `data/<SYMBOL>.csv`
+
+Required CSV columns:
+- `time`, `open`, `high`, `low`, `close`
+- optional: `tick_volume`
 
 ## 📊 Logs & Monitoring
 

@@ -1,13 +1,13 @@
 """
-Forex Liquidity Hunter - Strategy Module (V18 Disciplined Trader)
-=================================================================
-Implements 3 parallel strategies with full validation:
-  1. SMC Liquidity Sweep (High Precision)
-  2. Session Breakout (Aggressive Momentum)
-  3. RSI Scalper (Mean Reversion)
+Forex Liquidity Hunter - Strategy Module (V19 Quant Engine)
+============================================================
+Primary alpha engine is a quant multi-factor model:
+    1. Trend factor (EMA spread normalized by ATR)
+    2. Momentum spread z-score (short-horizon vs long-horizon returns)
+    3. Mean-reversion factor (price distance from rolling fair value)
+    4. Volatility regime penalty (short-vol vs long-vol)
 
-All signals must pass the 6-point pre-entry validation gate
-via market_filter.validate_entry() before being returned.
+All candidate signals must pass market_filter.validate_entry().
 """
 import logging
 from dataclasses import dataclass
@@ -76,13 +76,16 @@ def detect_sweep(
 ) -> Optional[dict]:
     """Check if price pushed beyond the session range."""
     sym_info = mt5_bridge.get_symbol_info(symbol)
-    if sym_info is None: return None
+    if sym_info is None:
+        return None
 
-    pip_size = sym_info.point * 10 if sym_info.digits in (3, 5) else sym_info.point
+    pip_size = sym_info.point * \
+        10 if sym_info.digits in (3, 5) else sym_info.point
     threshold = config.SWEEP_THRESHOLD_PIPS * pip_size
 
     df = mt5_bridge.get_ohlc(symbol, timeframe_minutes=1, count=30)
-    if df is None or df.empty: return None
+    if df is None or df.empty:
+        return None
 
     recent_high = df["high"].max()
     recent_low = df["low"].min()
@@ -100,32 +103,38 @@ def detect_sweep(
 
 def detect_fvg_entry(symbol: str, sweep_data: dict) -> Optional[dict]:
     """Look for an FVG forming after the sweep."""
-    df = mt5_bridge.get_ohlc(symbol, timeframe_minutes=config.SCAN_TIMEFRAME_MINUTES, count=10)
-    if df is None or len(df) < 5: return None
-    
+    df = mt5_bridge.get_ohlc(
+        symbol, timeframe_minutes=config.SCAN_TIMEFRAME_MINUTES, count=10)
+    if df is None or len(df) < 5:
+        return None
+
     sym_info = mt5_bridge.get_symbol_info(symbol)
-    pip_size = sym_info.point * 10 if sym_info.digits in (3, 5) else sym_info.point
+    pip_size = sym_info.point * \
+        10 if sym_info.digits in (3, 5) else sym_info.point
     min_fvg_size = config.FVG_MIN_SIZE_PIPS * pip_size
-    
+
     current_price = mt5_bridge.get_current_price(symbol)
-    if current_price is None: return None
+    if current_price is None:
+        return None
 
     for i in range(len(df) - 3, 0, -1):
         c0, c1, c2 = df.iloc[i-1], df.iloc[i], df.iloc[i+1]
-        
+
         if sweep_data["type"] == "HIGH_SWEPT":
             gap = c0["low"] - c2["high"]
             if gap >= min_fvg_size:
                 fvg_top, fvg_bottom = c0["low"], c2["high"]
-                target_entry = (fvg_top + fvg_bottom) / 2.0 if getattr(config, "USE_FVG_50_ENTRY", False) else fvg_bottom
+                target_entry = (fvg_top + fvg_bottom) / 2.0 if getattr(config,
+                                                                       "USE_FVG_50_ENTRY", False) else fvg_bottom
                 if target_entry <= current_price["ask"] <= fvg_top + (2 * pip_size):
                     return {"wick_tip": sweep_data["extreme"], "fvg_entry": current_price["ask"]}
-                    
+
         elif sweep_data["type"] == "LOW_SWEPT":
             gap = c2["low"] - c0["high"]
             if gap >= min_fvg_size:
                 fvg_top, fvg_bottom = c2["low"], c0["high"]
-                target_entry = (fvg_top + fvg_bottom) / 2.0 if getattr(config, "USE_FVG_50_ENTRY", False) else fvg_top
+                target_entry = (fvg_top + fvg_bottom) / 2.0 if getattr(config,
+                                                                       "USE_FVG_50_ENTRY", False) else fvg_top
                 if fvg_bottom - (2 * pip_size) <= current_price["bid"] <= target_entry:
                     return {"wick_tip": sweep_data["extreme"], "fvg_entry": current_price["bid"]}
     return None
@@ -139,16 +148,19 @@ def detect_breakout(symbol: str, session_high: float, session_low: float) -> Opt
     if not getattr(config, "ENABLE_BREAKOUT", False):
         return None
     df = mt5_bridge.get_ohlc(symbol, timeframe_minutes=5, count=4)
-    if df is None or len(df) < 4: return None
+    if df is None or len(df) < 4:
+        return None
     last_candle, prev_candle = df.iloc[-1], df.iloc[-2]
-    
+
     if last_candle["close"] > session_high and prev_candle["close"] > session_high:
         sl = session_low
-        tp = last_candle["close"] + (last_candle["close"] - session_low) * config.TP_RATIO
+        tp = last_candle["close"] + \
+            (last_candle["close"] - session_low) * config.TP_RATIO
         return {"type": "BREAKOUT_BUY", "entry": last_candle["close"], "sl": sl, "tp": tp}
     if last_candle["close"] < session_low and prev_candle["close"] < session_low:
         sl = session_high
-        tp = last_candle["close"] - (session_high - last_candle["close"]) * config.TP_RATIO
+        tp = last_candle["close"] - \
+            (session_high - last_candle["close"]) * config.TP_RATIO
         return {"type": "BREAKOUT_SELL", "entry": last_candle["close"], "sl": sl, "tp": tp}
     return None
 
@@ -161,25 +173,29 @@ def detect_rsi_scalp(symbol: str) -> Optional[dict]:
     if not getattr(config, "ENABLE_RSI_SCALP", False):
         return None
     df = mt5_bridge.get_ohlc(symbol, timeframe_minutes=5, count=30)
-    if df is None or len(df) < 20: return None
-    
+    if df is None or len(df) < 20:
+        return None
+
     delta = df["close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=config.RSI_PERIOD).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=config.RSI_PERIOD).mean()
     rs = gain / loss
     df["rsi"] = 100 - (100 / (1+rs))
-    
+
     last_rsi, last_candle = df["rsi"].iloc[-1], df.iloc[-1]
     sym_info = mt5_bridge.get_symbol_info(symbol)
-    pip_size = sym_info.point * 10 if sym_info.digits in (3, 5) else sym_info.point
-    
+    pip_size = sym_info.point * \
+        10 if sym_info.digits in (3, 5) else sym_info.point
+
     if last_rsi < config.RSI_OS:
         sl_price = last_candle["low"] - (config.SL_BUFFER_PIPS * pip_size)
-        tp_price = last_candle["close"] + (last_candle["close"] - sl_price) * config.TP_RATIO
+        tp_price = last_candle["close"] + \
+            (last_candle["close"] - sl_price) * config.TP_RATIO
         return {"type": "RSI_OS_BUY", "entry": last_candle["close"], "sl": sl_price, "tp": tp_price}
     if last_rsi > config.RSI_OB:
         sl_price = last_candle["high"] + (config.SL_BUFFER_PIPS * pip_size)
-        tp_price = last_candle["close"] - (sl_price - last_candle["close"]) * config.TP_RATIO
+        tp_price = last_candle["close"] - \
+            (sl_price - last_candle["close"]) * config.TP_RATIO
         return {"type": "RSI_OB_SELL", "entry": last_candle["close"], "sl": sl_price, "tp": tp_price}
     return None
 
@@ -197,6 +213,152 @@ def _calc_rr_ratio(entry: float, sl: float, tp: float) -> float:
     return reward / risk
 
 
+def _latest_zscore(series: pd.Series, window: int) -> float:
+    """Return z-score of latest value using rolling mean/std."""
+    if series is None or series.empty or window < 5 or len(series) < window:
+        return 0.0
+
+    rolling_mean = series.rolling(window=window).mean().iloc[-1]
+    rolling_std = series.rolling(window=window).std().iloc[-1]
+    if pd.isna(rolling_mean) or pd.isna(rolling_std) or rolling_std <= 0:
+        return 0.0
+    return float((series.iloc[-1] - rolling_mean) / rolling_std)
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def _quant_param(symbol: str, key: str, default):
+    """Read quant parameter with optional per-symbol override."""
+    overrides = getattr(config, "QUANT_SYMBOL_OVERRIDES", {}) or {}
+    if symbol in overrides and key in overrides[symbol]:
+        return overrides[symbol][key]
+    return getattr(config, key, default)
+
+
+def _build_quant_signal(symbol: str, pip_size: float) -> Optional[Signal]:
+    """Build a candidate signal from multi-factor quant score."""
+    timeframe = int(_quant_param(symbol, "QUANT_TIMEFRAME_MINUTES", 5))
+    lookback = int(_quant_param(symbol, "QUANT_LOOKBACK_BARS", 320))
+    df = mt5_bridge.get_ohlc(
+        symbol, timeframe_minutes=timeframe, count=lookback)
+    if df is None or len(df) < max(120, lookback // 2):
+        return None
+
+    close = df["close"]
+    returns = close.pct_change()
+
+    ema_fast_period = int(_quant_param(symbol, "QUANT_EMA_FAST", 20))
+    ema_slow_period = int(_quant_param(symbol, "QUANT_EMA_SLOW", 80))
+    atr_period = int(_quant_param(symbol, "QUANT_ATR_PERIOD", 14))
+
+    ema_fast = close.ewm(span=ema_fast_period, adjust=False).mean()
+    ema_slow = close.ewm(span=ema_slow_period, adjust=False).mean()
+
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [
+            (df["high"] - df["low"]),
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr = tr.rolling(window=atr_period).mean().iloc[-1]
+    if pd.isna(atr) or atr <= 0:
+        return None
+
+    trend_raw = (ema_fast.iloc[-1] - ema_slow.iloc[-1]) / atr
+    trend_factor = _clamp(float(trend_raw), -3.0, 3.0) / 3.0
+
+    mom_short_bars = int(_quant_param(symbol, "QUANT_MOMENTUM_SHORT_BARS", 12))
+    mom_long_bars = int(_quant_param(symbol, "QUANT_MOMENTUM_LONG_BARS", 48))
+    z_window = int(_quant_param(symbol, "QUANT_ZSCORE_WINDOW", 80))
+
+    mom_short = close.pct_change(mom_short_bars)
+    mom_long = close.pct_change(mom_long_bars)
+    mom_spread = (mom_short - mom_long).dropna()
+    momentum_factor = _clamp(
+        _latest_zscore(mom_spread, z_window),
+        -3.0,
+        3.0,
+    ) / 3.0
+
+    mean_window = int(_quant_param(symbol, "QUANT_MEAN_WINDOW", 60))
+    rolling_mean = close.rolling(window=mean_window).mean()
+    rolling_std = close.rolling(window=mean_window).std()
+    if pd.isna(rolling_std.iloc[-1]) or rolling_std.iloc[-1] <= 0:
+        return None
+    mr_raw = (close.iloc[-1] - rolling_mean.iloc[-1]) / rolling_std.iloc[-1]
+    mean_reversion_factor = _clamp(float(-mr_raw), -3.0, 3.0) / 3.0
+
+    vol_short_window = int(_quant_param(symbol, "QUANT_VOL_SHORT_WINDOW", 24))
+    vol_long_window = int(_quant_param(symbol, "QUANT_VOL_LONG_WINDOW", 96))
+    vol_short = returns.rolling(window=vol_short_window).std().iloc[-1]
+    vol_long = returns.rolling(window=vol_long_window).std().iloc[-1]
+    if pd.isna(vol_short) or pd.isna(vol_long) or vol_long <= 0:
+        return None
+
+    vol_ratio = float(vol_short / vol_long)
+    vol_penalty = max(0.0, vol_ratio - 1.0)
+
+    w_trend = float(_quant_param(symbol, "QUANT_W_TREND", 0.45))
+    w_mom = float(_quant_param(symbol, "QUANT_W_MOMENTUM", 0.35))
+    w_mr = float(_quant_param(symbol, "QUANT_W_MEAN_REVERSION", 0.20))
+    score = (w_trend * trend_factor) + (w_mom * momentum_factor) + \
+        (w_mr * mean_reversion_factor)
+    score -= float(_quant_param(symbol,
+                   "QUANT_W_VOL_PENALTY", 0.25)) * vol_penalty
+
+    threshold = float(_quant_param(
+        symbol, "QUANT_SCORE_ENTRY_THRESHOLD", 0.20))
+    if abs(score) < threshold:
+        return None
+
+    prices = mt5_bridge.get_current_price(symbol)
+    if prices is None:
+        return None
+
+    direction = "BUY" if score > 0 else "SELL"
+    entry = prices["ask"] if direction == "BUY" else prices["bid"]
+
+    sl_atr = float(_quant_param(
+        symbol, "QUANT_ATR_SL_MULTIPLIER", 1.8)) * float(atr)
+    min_sl = getattr(config, "MIN_SL_PIPS_XAU", 50.0) if "XAU" in symbol else getattr(
+        config, "MIN_SL_PIPS", 15.0)
+    sl_distance = max(sl_atr, min_sl * pip_size)
+
+    rr_target = float(_quant_param(
+        symbol, "QUANT_TP_R_MULTIPLIER", config.TP_RATIO))
+    if direction == "BUY":
+        stop_loss = entry - sl_distance
+        take_profit = entry + (sl_distance * rr_target)
+    else:
+        stop_loss = entry + sl_distance
+        take_profit = entry - (sl_distance * rr_target)
+
+    sl_pips = sl_distance / pip_size
+    rr = _calc_rr_ratio(entry, stop_loss, take_profit)
+
+    reason = (
+        f"QuantMF score={score:+.3f} "
+        f"(trend={trend_factor:+.2f}, mom={momentum_factor:+.2f}, "
+        f"mr={mean_reversion_factor:+.2f}, vol_ratio={vol_ratio:.2f})"
+    )
+
+    return Signal(
+        symbol=symbol,
+        direction=direction,
+        entry_price=entry,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        sl_pips=sl_pips,
+        rr_ratio=rr,
+        reason=reason,
+    )
+
+
 # ======================================================================
 # Step 6: Main Signal Generator (Orchestrator)
 # ======================================================================
@@ -207,79 +369,27 @@ def generate_signal(symbol: str, risk_manager=None) -> Optional[Signal]:
     each signal through the 6-point pre-entry logic gate.
     """
     sym_info = mt5_bridge.get_symbol_info(symbol)
-    if sym_info is None: return None
-    pip_size = sym_info.point * 10 if sym_info.digits in (3, 5) else sym_info.point
-    
+    if sym_info is None:
+        return None
+    pip_size = sym_info.point * \
+        10 if sym_info.digits in (3, 5) else sym_info.point
+
     # Spread Check
     spread_pips = (sym_info.spread * sym_info.point) / pip_size
-    if spread_pips > config.MAX_SPREAD_PIPS: return None
+    if spread_pips > config.MAX_SPREAD_PIPS:
+        return None
 
-    # Session Range (needed for SMC + Breakout)
-    range_data = identify_session_range(symbol)
-    if range_data is None: return None
-
-    # --- Collect candidate signals from all strategies ---
     candidates = []
+    quant_signal = _build_quant_signal(symbol, pip_size)
+    if quant_signal is not None:
+        candidates.append(quant_signal)
 
-    # --- STRATEGY A: SMC Sweep ---
-    if getattr(config, "ENABLE_SMC_SWEEP", True):
-        sweep = detect_sweep(symbol, range_data["high"], range_data["low"])
-        if sweep:
-            # Only proceed if sweep is counter-trend (reversal setup)
-            htf_trend = market_filter.get_htf_trend(symbol)
-            should_proceed = True
-            if htf_trend:
-                if sweep["type"] == "HIGH_SWEPT" and htf_trend == "UPTREND":
-                    should_proceed = False  # Don't sell in uptrend
-                elif sweep["type"] == "LOW_SWEPT" and htf_trend == "DOWNTREND":
-                    should_proceed = False  # Don't buy in downtrend
-
-            if should_proceed:
-                entry_data = detect_fvg_entry(symbol, sweep)
-                if entry_data:
-                    direction = "BUY" if sweep["type"] == "LOW_SWEPT" else "SELL"
-                    entry = entry_data["fvg_entry"]
-                    sl = entry_data["wick_tip"]
-                    sl_dist = abs(entry - sl)
-                    tp = entry + sl_dist * config.TP_RATIO if direction == "BUY" else entry - sl_dist * config.TP_RATIO
-                    sl_pips = sl_dist / pip_size
-                    rr = _calc_rr_ratio(entry, sl, tp)
-
-                    candidates.append(Signal(
-                        symbol, direction, entry, sl, tp,
-                        sl_pips, rr, f"SMC: {sweep['type']} + FVG"
-                    ))
-
-    # --- STRATEGY B: Breakout ---
-    if getattr(config, "ENABLE_BREAKOUT", False):
-        brut = detect_breakout(symbol, range_data["high"], range_data["low"])
-        if brut:
-            direction = "BUY" if "BUY" in brut["type"] else "SELL"
-            sl_pips = abs(brut["entry"] - brut["sl"]) / pip_size
-            rr = _calc_rr_ratio(brut["entry"], brut["sl"], brut["tp"])
-            candidates.append(Signal(
-                symbol, direction, brut["entry"], brut["sl"], brut["tp"],
-                sl_pips, rr, f"Momentum: Session {brut['type']}"
-            ))
-
-    # --- STRATEGY C: RSI Scalp ---
-    if getattr(config, "ENABLE_RSI_SCALP", False):
-        rsi_s = detect_rsi_scalp(symbol)
-        if rsi_s:
-            direction = "BUY" if "BUY" in rsi_s["type"] else "SELL"
-            sl_pips = abs(rsi_s["entry"] - rsi_s["sl"]) / pip_size
-            rr = _calc_rr_ratio(rsi_s["entry"], rsi_s["sl"], rsi_s["tp"])
-            candidates.append(Signal(
-                symbol, direction, rsi_s["entry"], rsi_s["sl"], rsi_s["tp"],
-                sl_pips, rr, f"Scalp: {rsi_s['type']}"
-            ))
-
-    # --- Validate each candidate through the 6-point gate ---
+    # --- Validate each candidate through the master gate ---
     for signal in candidates:
         # --- Minimum SL distance check ---
         # Wider SL = smaller lot size = same dollar risk
         min_sl = getattr(config, "MIN_SL_PIPS_XAU", 50.0) if "XAU" in symbol else \
-                 getattr(config, "MIN_SL_PIPS", 15.0)
+            getattr(config, "MIN_SL_PIPS", 15.0)
 
         if signal.sl_pips < min_sl:
             # Widen SL to minimum and recalculate TP to maintain RR
@@ -294,7 +404,8 @@ def generate_signal(symbol: str, risk_manager=None) -> Optional[Signal]:
                 signal.take_profit = signal.entry_price - sl_dist_new * config.TP_RATIO
 
             signal.sl_pips = min_sl
-            signal.rr_ratio = _calc_rr_ratio(signal.entry_price, signal.stop_loss, signal.take_profit)
+            signal.rr_ratio = _calc_rr_ratio(
+                signal.entry_price, signal.stop_loss, signal.take_profit)
 
             logger.info(
                 f"[SL-WIDEN] {symbol}: SL widened {old_sl_pips:.1f} -> {min_sl:.1f} pips "
@@ -309,7 +420,7 @@ def generate_signal(symbol: str, risk_manager=None) -> Optional[Signal]:
             )
             continue
 
-        # Full 6-point validation
+        # Full validation
         valid, reason = market_filter.validate_entry(
             symbol=signal.symbol,
             direction=signal.direction,

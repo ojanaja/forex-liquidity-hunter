@@ -1,11 +1,11 @@
 """
-Forex Liquidity Hunter – Market Filter Module (V18)
-====================================================
-Central module for all pre-entry market condition checks:
-  1. HTF Trend Analysis (EMA 50/200 + Market Structure)
-  2. Sideways Detection (ATR + Bollinger Band Squeeze)
-  3. LTF Entry Confirmations (RSI, Candle Patterns, Volume)
-  4. Master Validation Gate
+Forex Liquidity Hunter – Market Filter Module (V19 Quant)
+==========================================================
+Central module for pre-entry market condition checks:
+    1. HTF trend analysis (EMA 50/200 + market structure)
+    2. Sideways detection (ATR + Bollinger squeeze)
+    3. Quant confirmations (trend/volatility/momentum statistics)
+    4. Master validation gate
 """
 import logging
 from typing import Optional
@@ -88,8 +88,10 @@ def get_htf_trend(symbol: str) -> Optional[str]:
         return None
 
     # Compute dual EMAs
-    df["ema_fast"] = df["close"].ewm(span=config.HTF_EMA_FAST, adjust=False).mean()
-    df["ema_slow"] = df["close"].ewm(span=config.HTF_EMA_SLOW, adjust=False).mean()
+    df["ema_fast"] = df["close"].ewm(
+        span=config.HTF_EMA_FAST, adjust=False).mean()
+    df["ema_slow"] = df["close"].ewm(
+        span=config.HTF_EMA_SLOW, adjust=False).mean()
 
     last_ema_fast = df["ema_fast"].iloc[-1]
     last_ema_slow = df["ema_slow"].iloc[-1]
@@ -107,15 +109,18 @@ def get_htf_trend(symbol: str) -> Optional[str]:
 
     # Consensus: EMA is primary, structure only vetoes on active contradiction
     if ema_trend == structure:
-        logger.debug(f"[HTF] {symbol}: {ema_trend} (EMA + Structure confirmed)")
+        logger.debug(
+            f"[HTF] {symbol}: {ema_trend} (EMA + Structure confirmed)")
         return ema_trend
     elif structure == "SIDEWAYS":
         # EMA has a direction, structure unclear → trust EMA
-        logger.debug(f"[HTF] {symbol}: {ema_trend} (EMA primary, structure unclear)")
+        logger.debug(
+            f"[HTF] {symbol}: {ema_trend} (EMA primary, structure unclear)")
         return ema_trend
     elif ema_trend == "SIDEWAYS":
         # EMA flat, structure has direction → trust structure
-        logger.debug(f"[HTF] {symbol}: {structure} (Structure primary, EMA flat)")
+        logger.debug(
+            f"[HTF] {symbol}: {structure} (Structure primary, EMA flat)")
         return structure
     else:
         # Active contradiction (UP vs DOWN)
@@ -270,7 +275,7 @@ def get_ltf_confirmations(symbol: str, direction: str) -> int:
     )
 
     if df is None or len(df) < 20:
-        return 0
+        return 0, []
 
     confirmations = 0
     reasons = []
@@ -319,6 +324,95 @@ def get_ltf_confirmations(symbol: str, direction: str) -> int:
         + ", ".join(reasons) if reasons else "none"
     )
     return confirmations, reasons
+
+
+def get_quant_confirmations(symbol: str, direction: str) -> tuple[int, list[str]]:
+    """
+    Quant confirmation layer using statistical metrics.
+
+    Checks:
+    1. EMA spread normalized by ATR aligns with direction
+    2. Momentum spread z-score aligns with direction
+    3. Volatility regime is not overheated (vol_short/vol_long <= threshold)
+    4. Volume z-score indicates sufficient participation
+    """
+    tf = getattr(config, "QUANT_TIMEFRAME_MINUTES",
+                 config.LTF_TIMEFRAME_MINUTES)
+    bars = max(220, getattr(config, "QUANT_LOOKBACK_BARS", 320) // 2)
+    df = mt5_bridge.get_ohlc(symbol, timeframe_minutes=tf, count=bars)
+
+    if df is None or len(df) < 150:
+        return 0, ["Quant data unavailable"]
+
+    close = df["close"]
+    returns = close.pct_change()
+    reasons: list[str] = []
+    confirms = 0
+
+    # 1) Trend factor
+    ema_fast = close.ewm(span=getattr(
+        config, "QUANT_EMA_FAST", 20), adjust=False).mean()
+    ema_slow = close.ewm(span=getattr(
+        config, "QUANT_EMA_SLOW", 80), adjust=False).mean()
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [
+            (df["high"] - df["low"]),
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr = tr.rolling(window=getattr(
+        config, "QUANT_ATR_PERIOD", 14)).mean().iloc[-1]
+
+    if not pd.isna(atr) and atr > 0:
+        trend_norm = (ema_fast.iloc[-1] - ema_slow.iloc[-1]) / atr
+        if (direction == "BUY" and trend_norm > 0) or (direction == "SELL" and trend_norm < 0):
+            confirms += 1
+            reasons.append(f"TrendNorm={trend_norm:+.2f}")
+
+    # 2) Momentum spread z-score
+    mom_short = close.pct_change(
+        getattr(config, "QUANT_MOMENTUM_SHORT_BARS", 12))
+    mom_long = close.pct_change(
+        getattr(config, "QUANT_MOMENTUM_LONG_BARS", 48))
+    spread = (mom_short - mom_long).dropna()
+    z_window = getattr(config, "QUANT_ZSCORE_WINDOW", 80)
+    mom_z = 0.0
+    if len(spread) >= z_window:
+        mean = spread.rolling(window=z_window).mean().iloc[-1]
+        std = spread.rolling(window=z_window).std().iloc[-1]
+        if not pd.isna(std) and std > 0:
+            mom_z = float((spread.iloc[-1] - mean) / std)
+
+    if (direction == "BUY" and mom_z > 0) or (direction == "SELL" and mom_z < 0):
+        confirms += 1
+        reasons.append(f"MomZ={mom_z:+.2f}")
+
+    # 3) Volatility regime
+    vol_short = returns.rolling(window=getattr(
+        config, "QUANT_VOL_SHORT_WINDOW", 24)).std().iloc[-1]
+    vol_long = returns.rolling(window=getattr(
+        config, "QUANT_VOL_LONG_WINDOW", 96)).std().iloc[-1]
+    if not pd.isna(vol_short) and not pd.isna(vol_long) and vol_long > 0:
+        vol_ratio = float(vol_short / vol_long)
+        if vol_ratio <= 1.35:
+            confirms += 1
+            reasons.append(f"VolRatio={vol_ratio:.2f}")
+
+    # 4) Volume participation
+    if "tick_volume" in df.columns:
+        vol_series = df["tick_volume"].astype(float)
+        vol_mean = vol_series.rolling(window=60).mean().iloc[-1]
+        vol_std = vol_series.rolling(window=60).std().iloc[-1]
+        if not pd.isna(vol_mean) and not pd.isna(vol_std) and vol_std > 0:
+            vol_z = float((vol_series.iloc[-1] - vol_mean) / vol_std)
+            if vol_z >= -0.5:
+                confirms += 1
+                reasons.append(f"VolumeZ={vol_z:+.2f}")
+
+    return confirms, reasons
 
 
 # ======================================================================
@@ -438,6 +532,36 @@ def validate_entry(
     # --- Check 3: Sideways detection (ATR + BB) ---
     if is_sideways(symbol):
         return False, "Sideways detected (low ATR + BB squeeze)"
+
+    # Quant-first validation path
+    if getattr(config, "ENABLE_ONLY_QUANT", False):
+        confirms, confirm_reasons = get_quant_confirmations(symbol, direction)
+        if confirms < config.MIN_CONFIRMATIONS:
+            return False, (
+                f"Insufficient quant confirmations: {confirms}/{config.MIN_CONFIRMATIONS}"
+            )
+
+        if rr_ratio < config.MIN_RISK_REWARD_RATIO:
+            return False, (
+                f"RR too low: {rr_ratio:.2f} (min {config.MIN_RISK_REWARD_RATIO})"
+            )
+
+        if risk_manager is not None:
+            corr_ok, corr_reason = risk_manager.check_correlation_filter(
+                symbol)
+            if not corr_ok:
+                return False, corr_reason
+
+        conditions_msg = (
+            f"HTF Trend: {htf_trend} | "
+            f"Quant confirms ({confirms}/4): {', '.join(confirm_reasons) if confirm_reasons else 'None'} | "
+            f"RR: {rr_ratio:.2f}"
+        )
+        logger.info(
+            f"[VALIDATE-QUANT] {symbol} {direction}: ALL CHECKS PASSED "
+            f"({conditions_msg})"
+        )
+        return True, conditions_msg
 
     # --- Check 3b: Impulse candle filter ---
     impulse_blocked, impulse_reason = detect_impulse_against(symbol, direction)
