@@ -1,23 +1,24 @@
 """
-Forex Liquidity Hunter - Backtester V18 (Realistic Simulation)
-===============================================================
+Forex Liquidity Hunter - Backtester V19 (Quant Aligned)
+========================================================
 Mirrors the LIVE bot logic as closely as possible:
-  - All 3 strategy engines (SMC Sweep, Breakout, RSI Scalp)
+    - Quant multi-factor signal engine
   - HTF Trend Filter (EMA 50/200 + Market Structure)
   - Sideways Detection (ATR + Bollinger Band Squeeze)
-  - LTF Confirmations (RSI, Engulfing, Volume)
+    - Quant confirmations (trend/momentum/volatility/volume)
   - News Filter (static schedule blackout simulation)
   - Minimum Risk-Reward Ratio validation
   - Correlation Filter (max 1 per group)
-  - Hybrid TP Checkpoint (partial close + trailing SL)
   - Net Profit = Gross - (Commission + Spread estimate)
   - Concurrent trade limit (MAX_OPEN_TRADES)
 
 Usage:
     python backtest.py
 """
+import os as _os
+import sys as _sys
+import time as _time
 import logging
-from collections import deque
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 import calendar
@@ -32,7 +33,6 @@ except ImportError:
     MT5_AVAILABLE = False
 
 import config
-from elliott_wave import detect_elliott_bt
 from news_filter import _generate_static_schedule, _extract_currencies_from_symbol
 import pytz
 
@@ -61,13 +61,9 @@ class BacktestTrade:
     tp: float
     risk_distance: float     # 1R in price
     pip_size: float
-    strategy: str            # "SMC", "BREAKOUT", "RSI"
+    strategy: str            # "QUANT"
     entry_time: object       # timestamp
-    original_volume: float = 1.0
     remaining_volume_pct: float = 1.0  # Track partial close %
-    checkpoints_hit: list = field(default_factory=lambda: [False] * len(getattr(config, 'TP_CHECKPOINTS', [1.0])))
-    trailing_active: bool = False
-    trailing_extreme: float = 0.0  # High watermark (BUY) or low watermark (SELL)
 
 
 @dataclass
@@ -81,7 +77,7 @@ class ClosedTrade:
     net_pnl: float
     entry_price: float = 0.0
     exit_price: float = 0.0
-    exit_type: str = ""       # SL, TP, PARTIAL, TRAIL, EOD
+    exit_type: str = ""       # SL, TP, EOD
     partial_exits: list = field(default_factory=list)
 
 
@@ -144,14 +140,17 @@ def compute_htf_trend(df_h1: pd.DataFrame, ts) -> str:
         return "UPTREND"
 
     # Get H1 data up to current time
-    h1_slice = df_h1.loc[:ts].tail(max(config.HTF_EMA_SLOW, config.HTF_STRUCTURE_LOOKBACK) + 50)
+    h1_slice = df_h1.loc[:ts].tail(
+        max(config.HTF_EMA_SLOW, config.HTF_STRUCTURE_LOOKBACK) + 50)
 
     if len(h1_slice) < config.HTF_EMA_SLOW:
         return "SIDEWAYS"
 
     # Dual EMA
-    ema_fast = h1_slice["close"].ewm(span=config.HTF_EMA_FAST, adjust=False).mean()
-    ema_slow = h1_slice["close"].ewm(span=config.HTF_EMA_SLOW, adjust=False).mean()
+    ema_fast = h1_slice["close"].ewm(
+        span=config.HTF_EMA_FAST, adjust=False).mean()
+    ema_slow = h1_slice["close"].ewm(
+        span=config.HTF_EMA_SLOW, adjust=False).mean()
 
     if ema_fast.iloc[-1] > ema_slow.iloc[-1]:
         ema_trend = "UPTREND"
@@ -218,7 +217,8 @@ def check_sideways(df_h1: pd.DataFrame, ts) -> bool:
     high = h1_slice["high"]
     low = h1_slice["low"]
     prev_close = h1_slice["close"].shift(1)
-    tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
+    tr = pd.concat([high - low, (high - prev_close).abs(),
+                   (low - prev_close).abs()], axis=1).max(axis=1)
     atr = tr.rolling(window=config.ATR_PERIOD).mean()
 
     current_atr = atr.iloc[-1]
@@ -232,7 +232,8 @@ def check_sideways(df_h1: pd.DataFrame, ts) -> bool:
     # BB Squeeze
     sma = h1_slice["close"].rolling(window=config.BB_PERIOD).mean()
     std = h1_slice["close"].rolling(window=config.BB_PERIOD).std()
-    band_width = (sma.iloc[-1] + config.BB_STD_DEV * std.iloc[-1]) - (sma.iloc[-1] - config.BB_STD_DEV * std.iloc[-1])
+    band_width = (sma.iloc[-1] + config.BB_STD_DEV * std.iloc[-1]) - \
+        (sma.iloc[-1] - config.BB_STD_DEV * std.iloc[-1])
     last_price = h1_slice["close"].iloc[-1]
 
     if last_price <= 0:
@@ -244,64 +245,132 @@ def check_sideways(df_h1: pd.DataFrame, ts) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LTF CONFIRMATIONS (RSI, Engulfing, Volume)
+# QUANT SIGNAL + CONFIRMATIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def count_ltf_confirmations(df_m5: pd.DataFrame, ts, direction: str) -> int:
-    """Mirrors market_filter.get_ltf_confirmations()"""
-    m5_slice = df_m5.loc[:ts].tail(30)
-    if len(m5_slice) < 20:
-        return 0
+def _qparam(symbol: str, key: str, default):
+    overrides = getattr(config, "QUANT_SYMBOL_OVERRIDES", {}) or {}
+    if symbol in overrides and key in overrides[symbol]:
+        return overrides[symbol][key]
+    return getattr(config, key, default)
+
+
+def _latest_zscore(series: pd.Series, window: int) -> float:
+    if series is None or series.empty or len(series) < window or window < 5:
+        return 0.0
+    mean = series.rolling(window=window).mean().iloc[-1]
+    std = series.rolling(window=window).std().iloc[-1]
+    if pd.isna(mean) or pd.isna(std) or std <= 0:
+        return 0.0
+    return float((series.iloc[-1] - mean) / std)
+
+
+def detect_quant_signal_bt(df_m5: pd.DataFrame, ts, symbol: str, pip_size: float) -> dict | None:
+    """Generate quant signal from historical slice (backtest-safe)."""
+    lookback = int(_qparam(symbol, "QUANT_LOOKBACK_BARS", 320))
+    m5_slice = df_m5.loc[:ts].tail(lookback)
+    if len(m5_slice) < max(120, lookback // 2):
+        return None
+
+    close = m5_slice["close"]
+    returns = close.pct_change()
+
+    ema_fast = close.ewm(
+        span=int(_qparam(symbol, "QUANT_EMA_FAST", 20)), adjust=False).mean()
+    ema_slow = close.ewm(
+        span=int(_qparam(symbol, "QUANT_EMA_SLOW", 80)), adjust=False).mean()
+
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [
+            m5_slice["high"] - m5_slice["low"],
+            (m5_slice["high"] - prev_close).abs(),
+            (m5_slice["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr = tr.rolling(window=int(
+        _qparam(symbol, "QUANT_ATR_PERIOD", 14))).mean().iloc[-1]
+    if pd.isna(atr) or atr <= 0:
+        return None
+
+    trend_norm = float((ema_fast.iloc[-1] - ema_slow.iloc[-1]) / atr)
+    trend_factor = max(-3.0, min(3.0, trend_norm)) / 3.0
+
+    mom_short = close.pct_change(
+        int(_qparam(symbol, "QUANT_MOMENTUM_SHORT_BARS", 12)))
+    mom_long = close.pct_change(
+        int(_qparam(symbol, "QUANT_MOMENTUM_LONG_BARS", 48)))
+    mom_spread = (mom_short - mom_long).dropna()
+    mom_z = _latest_zscore(mom_spread, int(
+        _qparam(symbol, "QUANT_ZSCORE_WINDOW", 80)))
+    momentum_factor = max(-3.0, min(3.0, mom_z)) / 3.0
+
+    mean_window = int(_qparam(symbol, "QUANT_MEAN_WINDOW", 60))
+    mean = close.rolling(window=mean_window).mean().iloc[-1]
+    std = close.rolling(window=mean_window).std().iloc[-1]
+    if pd.isna(mean) or pd.isna(std) or std <= 0:
+        return None
+    mr_raw = float((close.iloc[-1] - mean) / std)
+    mean_reversion_factor = max(-3.0, min(3.0, -mr_raw)) / 3.0
+
+    vol_short = returns.rolling(window=int(
+        _qparam(symbol, "QUANT_VOL_SHORT_WINDOW", 24))).std().iloc[-1]
+    vol_long = returns.rolling(window=int(
+        _qparam(symbol, "QUANT_VOL_LONG_WINDOW", 96))).std().iloc[-1]
+    if pd.isna(vol_short) or pd.isna(vol_long) or vol_long <= 0:
+        return None
+    vol_ratio = float(vol_short / vol_long)
+    vol_penalty = max(0.0, vol_ratio - 1.0)
+
+    w_trend = float(_qparam(symbol, "QUANT_W_TREND", 0.45))
+    w_mom = float(_qparam(symbol, "QUANT_W_MOMENTUM", 0.35))
+    w_mr = float(_qparam(symbol, "QUANT_W_MEAN_REVERSION", 0.20))
+    w_vol = float(_qparam(symbol, "QUANT_W_VOL_PENALTY", 0.25))
+    score = (w_trend * trend_factor) + (w_mom * momentum_factor) + \
+        (w_mr * mean_reversion_factor) - (w_vol * vol_penalty)
+
+    threshold = float(_qparam(symbol, "QUANT_SCORE_ENTRY_THRESHOLD", 0.20))
+    if abs(score) < threshold:
+        return None
+
+    direction = "BUY" if score > 0 else "SELL"
+    entry = float(close.iloc[-1])
+    sl_dist = max(float(_qparam(symbol, "QUANT_ATR_SL_MULTIPLIER", 1.8)) * float(atr),
+                  (getattr(config, "MIN_SL_PIPS_XAU", 50.0) if "XAU" in symbol else getattr(config, "MIN_SL_PIPS", 15.0)) * pip_size)
+    rr = float(_qparam(symbol, "QUANT_TP_R_MULTIPLIER", config.TP_RATIO))
+
+    if direction == "BUY":
+        sl = entry - sl_dist
+        tp = entry + (sl_dist * rr)
+    else:
+        sl = entry + sl_dist
+        tp = entry - (sl_dist * rr)
 
     confirmations = 0
-
-    # 1. RSI
-    delta = m5_slice["close"].diff()
-    gain = delta.where(delta > 0, 0).rolling(window=config.RSI_PERIOD).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=config.RSI_PERIOD).mean()
-
-    if loss.iloc[-1] != 0:
-        rs = gain.iloc[-1] / loss.iloc[-1]
-        rsi = 100 - (100 / (1 + rs))
-    else:
-        rsi = 100.0
-
-    if direction == "BUY" and rsi < config.RSI_OB:
+    if (direction == "BUY" and trend_norm > 0) or (direction == "SELL" and trend_norm < 0):
         confirmations += 1
-    elif direction == "SELL" and rsi > config.RSI_OS:
+    if (direction == "BUY" and mom_z > 0) or (direction == "SELL" and mom_z < 0):
         confirmations += 1
+    if vol_ratio <= 1.35:
+        confirmations += 1
+    if "tick_volume" in m5_slice.columns and len(m5_slice) >= 60:
+        vol_mean = m5_slice["tick_volume"].rolling(window=60).mean().iloc[-1]
+        vol_std = m5_slice["tick_volume"].rolling(window=60).std().iloc[-1]
+        if not pd.isna(vol_mean) and not pd.isna(vol_std) and vol_std > 0:
+            vol_z = float(
+                (m5_slice["tick_volume"].iloc[-1] - vol_mean) / vol_std)
+            if vol_z >= -0.5:
+                confirmations += 1
 
-    # 2. Engulfing
-    if len(m5_slice) >= 2:
-        prev, curr = m5_slice.iloc[-2], m5_slice.iloc[-1]
-        if direction == "BUY":
-            if prev["close"] < prev["open"] and curr["close"] > curr["open"]:
-                if curr["close"] > prev["open"] and curr["open"] < prev["close"]:
-                    confirmations += 1
-        elif direction == "SELL":
-            if prev["close"] > prev["open"] and curr["close"] < curr["open"]:
-                if curr["close"] < prev["open"] and curr["open"] > prev["close"]:
-                    confirmations += 1
-
-    # 3. Rejection / Pin bar
-    candle = m5_slice.iloc[-1]
-    body = abs(candle["close"] - candle["open"])
-    if direction == "BUY":
-        lower_wick = min(candle["open"], candle["close"]) - candle["low"]
-        if body > 0 and lower_wick > body * 2:
-            confirmations += 1
-    elif direction == "SELL":
-        upper_wick = candle["high"] - max(candle["open"], candle["close"])
-        if body > 0 and upper_wick > body * 2:
-            confirmations += 1
-
-    # 4. Volume spike
-    if "tick_volume" in m5_slice.columns:
-        avg_vol = m5_slice["tick_volume"].iloc[-20:-1].mean()
-        if avg_vol > 0 and m5_slice["tick_volume"].iloc[-1] > avg_vol * 1.5:
-            confirmations += 1
-
-    return confirmations
+    return {
+        "type": direction,
+        "entry": entry,
+        "sl": sl,
+        "tp": tp,
+        "strategy": "QUANT",
+        "confirmations": confirmations,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -341,7 +410,8 @@ def _check_news_blackout_bt(ts, symbol: str) -> bool:
     if hasattr(ts, 'tzinfo') and ts.tzinfo is not None:
         ts_utc = ts
     else:
-        ts_utc = pytz.UTC.localize(ts) if not isinstance(ts, pd.Timestamp) else ts.tz_localize(pytz.UTC)
+        ts_utc = pytz.UTC.localize(ts) if not isinstance(
+            ts, pd.Timestamp) else ts.tz_localize(pytz.UTC)
 
     for event in events:
         event_currency = event.get("currency", "")
@@ -384,138 +454,10 @@ def check_correlation(symbol: str, open_trades: list) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RSI SCALP STRATEGY (backtest version)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def detect_rsi_scalp_bt(df_m5: pd.DataFrame, ts, pip_size: float):
-    """Detects RSI oversold/overbought for mean reversion entry."""
-    if not getattr(config, "ENABLE_RSI_SCALP", False):
-        return None
-
-    m5_slice = df_m5.loc[:ts].tail(30)
-    if len(m5_slice) < 20:
-        return None
-
-    delta = m5_slice["close"].diff()
-    gain = delta.where(delta > 0, 0).rolling(window=config.RSI_PERIOD).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=config.RSI_PERIOD).mean()
-
-    if loss.iloc[-1] == 0:
-        return None
-
-    rs = gain.iloc[-1] / loss.iloc[-1]
-    last_rsi = 100 - (100 / (1 + rs))
-    last = m5_slice.iloc[-1]
-
-    if last_rsi < config.RSI_OS:
-        sl = last["low"] - config.SL_BUFFER_PIPS * pip_size
-        tp = last["close"] + (last["close"] - sl) * config.TP_RATIO
-        return {"type": "BUY", "entry": last["close"], "sl": sl, "tp": tp, "strategy": "RSI"}
-    elif last_rsi > config.RSI_OB:
-        sl = last["high"] + config.SL_BUFFER_PIPS * pip_size
-        tp = last["close"] - (sl - last["close"]) * config.TP_RATIO
-        return {"type": "SELL", "entry": last["close"], "sl": sl, "tp": tp, "strategy": "RSI"}
-
-    return None
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# CHECKPOINT TP MANAGEMENT (backtest version)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def process_checkpoints(trade: BacktestTrade, high: float, low: float, pip_size: float) -> list:
-    """
-    Process checkpoint TP logic. Returns list of partial exit results.
-    Each result: {"pct": fraction, "pnl": dollar_pnl}
-    """
-    if not getattr(config, "ENABLE_CHECKPOINT_TP", False):
-        return []
-
-    checkpoints = getattr(config, "TP_CHECKPOINTS", [1.0, 2.0, 3.0])
-    partial_pcts = getattr(config, "TP_PARTIAL_CLOSE_PCTS", [0.40, 0.30, 0.00])
-    trailing_step = getattr(config, "TRAILING_STEP_PIPS", 10.0) * pip_size
-
-    partial_exits = []
-
-    # Current price for RR calculation
-    if trade.trade_type == "BUY":
-        current_best = high
-        current_profit_dist = current_best - trade.entry
-    else:
-        current_best = low
-        current_profit_dist = trade.entry - current_best
-
-    rr_achieved = current_profit_dist / trade.risk_distance if trade.risk_distance > 0 else 0
-
-    # Process checkpoints
-    for i, (r_level, close_pct) in enumerate(zip(checkpoints, partial_pcts)):
-        if trade.checkpoints_hit[i]:
-            continue
-
-        if rr_achieved >= r_level:
-            trade.checkpoints_hit[i] = True
-
-            # Partial close
-            if close_pct > 0 and trade.remaining_volume_pct > 0:
-                exit_price = trade.entry + (trade.risk_distance * r_level) if trade.trade_type == "BUY" \
-                    else trade.entry - (trade.risk_distance * r_level)
-                p_pips = abs(exit_price - trade.entry) / pip_size
-                pnl_portion = (p_pips / (trade.risk_distance / pip_size)) * RISK_PER_TRADE * close_pct
-                # Deduct commission for this portion
-                net_pnl = pnl_portion - (COMMISSION_PER_LOT * close_pct * 0.5) - (SPREAD_COST_PIPS * pip_size * close_pct)
-                partial_exits.append({"pct": close_pct, "pnl": net_pnl, "checkpoint": f"TP{i+1}"})
-                trade.remaining_volume_pct -= close_pct
-
-            # Move SL
-            if i == 0:
-                # SL to Break-Even + commission/spread buffer
-                # Mirror the live bot's _calc_be_buffer logic
-                commission_distance = (COMMISSION_PER_LOT / (RISK_PER_TRADE / trade.risk_distance * pip_size)) * pip_size if RISK_PER_TRADE > 0 else 0
-                spread_distance = SPREAD_COST_PIPS * pip_size
-                be_buffer = commission_distance + spread_distance
-                if trade.trade_type == "BUY":
-                    trade.sl = max(trade.sl, trade.entry + be_buffer)
-                else:
-                    trade.sl = min(trade.sl, trade.entry - be_buffer)
-            else:
-                # SL to previous checkpoint
-                prev_r = checkpoints[i - 1]
-                if trade.trade_type == "BUY":
-                    new_sl = trade.entry + (trade.risk_distance * prev_r)
-                    trade.sl = max(trade.sl, new_sl)
-                else:
-                    new_sl = trade.entry - (trade.risk_distance * prev_r)
-                    trade.sl = min(trade.sl, new_sl)
-
-            # After final checkpoint: enable trailing only if configured
-            if i == len(checkpoints) - 1 and getattr(config, "ENABLE_TRAILING_AFTER_FINAL", False):
-                trade.trailing_active = True
-                trade.trailing_extreme = current_best
-                trade.tp = 0  # Remove TP — let it ride
-
-    # Trailing SL
-    if trade.trailing_active:
-        if trade.trade_type == "BUY":
-            if high > trade.trailing_extreme:
-                trade.trailing_extreme = high
-            trail_sl = trade.trailing_extreme - trailing_step
-            if trail_sl > trade.sl:
-                trade.sl = trail_sl
-        else:
-            if low < trade.trailing_extreme:
-                trade.trailing_extreme = low
-            trail_sl = trade.trailing_extreme + trailing_step
-            if trail_sl < trade.sl:
-                trade.sl = trail_sl
-
-    return partial_exits
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # MAIN BACKTEST ENGINE
 # ══════════════════════════════════════════════════════════════════════════════
-
 _ticket_counter = 0
+
 
 def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=None):
     """
@@ -551,27 +493,11 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
             continue
 
         pip_size = info.point * 10 if info.digits in (3, 5) else info.point
-        thresh = config.SWEEP_THRESHOLD_PIPS * pip_size
-        fvg_min = config.FVG_MIN_SIZE_PIPS * pip_size
-        sl_buff = config.SL_BUFFER_PIPS * pip_size
-        max_sl_p = 1000.0 if "XAU" in symbol else 50.0
-
-        range_buf = deque(maxlen=288)
-        fvg_buf = deque(maxlen=24)
-        active_s_h, active_s_l = None, None
-        last_sweep_type = None
-        sweep_expiry = datetime.min
         symbol_cooldown = datetime.min
 
         for ts, row in df_m5.iterrows():
             h = float(row["high"])
             l = float(row["low"])
-            o = float(row["open"])
-            c = float(row["close"])
-            vol = float(row.get("tick_volume", 0))
-            candle = {"high": h, "low": l, "open": o, "close": c}
-            range_buf.append(candle)
-            fvg_buf.append(candle)
 
             wib = ts + timedelta(hours=BROKER_TO_WIB)
             t_str = wib.strftime("%H:%M")
@@ -582,29 +508,17 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                 if trade.symbol != symbol:
                     continue
 
-                # Process checkpoints
-                partial_results = process_checkpoints(trade, h, l, pip_size)
-                for pr in partial_results:
-                    all_closed_trades.append(ClosedTrade(
-                        time=ts, symbol=symbol, trade_type=trade.trade_type,
-                        strategy=trade.strategy,
-                        gross_pnl=pr["pnl"], net_pnl=pr["pnl"],
-                        entry_price=trade.entry, exit_price=0.0,
-                        exit_type=f"PARTIAL-{pr['checkpoint']}",
-                        partial_exits=[pr["checkpoint"]],
-                    ))
-
                 # Check SL/TP hit
                 exit_price = None
                 if trade.trade_type == "BUY":
                     if l <= trade.sl:
                         exit_price = trade.sl
-                    elif trade.tp > 0 and h >= trade.tp:
+                    elif h >= trade.tp:
                         exit_price = trade.tp
                 else:
                     if h >= trade.sl:
                         exit_price = trade.sl
-                    elif trade.tp > 0 and l <= trade.tp:
+                    elif l <= trade.tp:
                         exit_price = trade.tp
 
                 if exit_price is not None:
@@ -614,16 +528,15 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                         p_pips = (trade.entry - exit_price) / pip_size
 
                     sl_pips = trade.risk_distance / pip_size
-                    gross_pnl = (p_pips / sl_pips) * RISK_PER_TRADE * trade.remaining_volume_pct
+                    gross_pnl = (p_pips / sl_pips) * \
+                        RISK_PER_TRADE * trade.remaining_volume_pct
                     # Deduct commission + spread for remaining portion
                     commission = COMMISSION_PER_LOT * trade.remaining_volume_pct * 0.5
                     spread_cost = SPREAD_COST_PIPS * pip_size * trade.remaining_volume_pct
                     net_pnl = gross_pnl - commission - spread_cost
 
                     exit_reason = "TP" if ((trade.trade_type == "BUY" and exit_price >= trade.tp and trade.tp > 0) or
-                                          (trade.trade_type == "SELL" and exit_price <= trade.tp and trade.tp > 0)) else "SL"
-                    if trade.trailing_active and exit_reason == "SL":
-                        exit_reason = "TRAIL"
+                                           (trade.trade_type == "SELL" and exit_price <= trade.tp and trade.tp > 0)) else "SL"
 
                     all_closed_trades.append(ClosedTrade(
                         time=ts, symbol=symbol, trade_type=trade.trade_type,
@@ -633,7 +546,8 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                         exit_type=exit_reason,
                     ))
                     trades_to_close.append(trade)
-                    symbol_cooldown = ts + timedelta(minutes=config.TRADE_COOLDOWN_MINUTES)
+                    symbol_cooldown = ts + \
+                        timedelta(minutes=config.TRADE_COOLDOWN_MINUTES)
 
             for t in trades_to_close:
                 if t in open_trades:
@@ -654,16 +568,9 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                 continue
 
             # ── Session window check ──
-            in_window = ("14:00" <= t_str <= "18:00") or ("19:00" <= t_str <= "22:59")
-            if in_window and active_s_h is None and len(range_buf) >= 200:
-                active_s_h = max(can["high"] for can in list(range_buf)[:-1])
-                active_s_l = min(can["low"] for can in list(range_buf)[:-1])
+            in_window = ("14:00" <= t_str <= "18:00") or (
+                "19:00" <= t_str <= "22:59")
             if not in_window:
-                active_s_h, active_s_l = None, None
-                last_sweep_type = None
-                sweep_expiry = datetime.min
-                continue
-            if active_s_h is None:
                 continue
 
             dx["in_session"] += 1
@@ -693,173 +600,22 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                 dx["corr_block"] += 1
                 continue
 
-            # ══════════════════════════════════════════════════
-            # STRATEGY A: SMC Sweep
-            # ══════════════════════════════════════════════════
-            signal = None
-
-            if getattr(config, "ENABLE_SMC_SWEEP", True):
-                # Detect sweep
-                if h >= active_s_h + thresh:
-                    last_sweep_type = "HIGH"
-                    sweep_expiry = ts + timedelta(minutes=60)
-                elif l <= active_s_l - thresh:
-                    last_sweep_type = "LOW"
-                    sweep_expiry = ts + timedelta(minutes=60)
-
-                if ts > sweep_expiry:
-                    last_sweep_type = None
-
-                if last_sweep_type:
-                    # FVG detection
-                    cl = list(fvg_buf)
-                    for i in range(len(cl) - 1, 1, -1):
-                        newer, older = cl[i], cl[i - 2]
-
-                        if last_sweep_type == "HIGH" and htf_trend == "DOWNTREND":
-                            if (older["low"] - newer["high"]) >= fvg_min:
-                                te = (older["low"] + newer["high"]) / 2 if config.USE_FVG_50_ENTRY else newer["high"]
-                                sl = max(can["high"] for can in cl[-12:]) + sl_buff
-                                sl_p = (sl - te) / pip_size
-                                rr = config.TP_RATIO  # TP = entry - risk * TP_RATIO, so RR = TP_RATIO
-                                if 3.0 <= sl_p <= max_sl_p and rr >= config.MIN_RISK_REWARD_RATIO:
-                                    signal = {
-                                        "type": "SELL", "entry": te, "sl": sl,
-                                        "tp": te - (sl - te) * config.TP_RATIO,
-                                        "strategy": "SMC",
-                                    }
-                                    break
-
-                        elif last_sweep_type == "LOW" and htf_trend == "UPTREND":
-                            if (newer["low"] - older["high"]) >= fvg_min:
-                                te = (newer["low"] + older["high"]) / 2 if config.USE_FVG_50_ENTRY else newer["low"]
-                                sl = min(can["low"] for can in cl[-12:]) - sl_buff
-                                sl_p = (te - sl) / pip_size
-                                rr = config.TP_RATIO  # TP = entry + risk * TP_RATIO, so RR = TP_RATIO
-                                if 3.0 <= sl_p <= max_sl_p and rr >= config.MIN_RISK_REWARD_RATIO:
-                                    signal = {
-                                        "type": "BUY", "entry": te, "sl": sl,
-                                        "tp": te + (te - sl) * config.TP_RATIO,
-                                        "strategy": "SMC",
-                                    }
-                                    break
-
-            # ══════════════════════════════════════════════════
-            # STRATEGY B: Breakout
-            # ══════════════════════════════════════════════════
-            if signal is None and getattr(config, "ENABLE_BREAKOUT", False):
-                m5_recent = df_m5.loc[:ts].tail(4)
-                if len(m5_recent) >= 4:
-                    last_c = m5_recent.iloc[-1]
-                    prev_c = m5_recent.iloc[-2]
-
-                    if last_c["close"] > active_s_h and prev_c["close"] > active_s_h and htf_trend == "UPTREND":
-                        sl = active_s_l
-                        sl_p = (last_c["close"] - sl) / pip_size
-                        rr = config.TP_RATIO
-                        if 3.0 <= sl_p <= max_sl_p and rr >= config.MIN_RISK_REWARD_RATIO:
-                            signal = {
-                                "type": "BUY", "entry": last_c["close"], "sl": sl,
-                                "tp": last_c["close"] + (last_c["close"] - sl) * config.TP_RATIO,
-                                "strategy": "BREAKOUT",
-                            }
-
-                    elif last_c["close"] < active_s_l and prev_c["close"] < active_s_l and htf_trend == "DOWNTREND":
-                        sl = active_s_h
-                        sl_p = (sl - last_c["close"]) / pip_size
-                        rr = config.TP_RATIO
-                        if 3.0 <= sl_p <= max_sl_p and rr >= config.MIN_RISK_REWARD_RATIO:
-                            signal = {
-                                "type": "SELL", "entry": last_c["close"], "sl": sl,
-                                "tp": last_c["close"] - (sl - last_c["close"]) * config.TP_RATIO,
-                                "strategy": "BREAKOUT",
-                            }
-
-            # ══════════════════════════════════════════════════
-            # STRATEGY C: RSI Scalp
-            # ══════════════════════════════════════════════════
-            if signal is None:
-                rsi_result = detect_rsi_scalp_bt(df_m5, ts, pip_size)
-                if rsi_result:
-                    sl_p = abs(rsi_result["entry"] - rsi_result["sl"]) / pip_size
-                    rr = abs(rsi_result["tp"] - rsi_result["entry"]) / abs(rsi_result["entry"] - rsi_result["sl"]) \
-                        if abs(rsi_result["entry"] - rsi_result["sl"]) > 0 else 0
-
-                    # Must align with HTF trend
-                    if rsi_result["type"] == "BUY" and htf_trend == "UPTREND" and rr >= config.MIN_RISK_REWARD_RATIO:
-                        signal = rsi_result
-                    elif rsi_result["type"] == "SELL" and htf_trend == "DOWNTREND" and rr >= config.MIN_RISK_REWARD_RATIO:
-                        signal = rsi_result
-
-            # ══════════════════════════════════════════════════
-            # STRATEGY D: Elliott Wave (Wave 3 Entry)
-            # ══════════════════════════════════════════════════
-            if signal is None and getattr(config, "ENABLE_ELLIOTT_WAVE", False):
-                ew_result = detect_elliott_bt(df_m15_all, ts, htf_trend, pip_size)
-                if ew_result:
-                    signal = ew_result
-
-            # ══════════════════════════════════════════════════
-            # VALIDATION: Impulse Candle Filter
-            # ══════════════════════════════════════════════════
-            if signal is not None:
-                impulse_multiplier = getattr(config, "IMPULSE_BODY_MULTIPLIER", 2.0)
-                m5_recent = df_m5.loc[:ts].tail(25)
-                if len(m5_recent) >= 20:
-                    bodies = (m5_recent["close"] - m5_recent["open"]).abs()
-                    avg_body = bodies.iloc[-20:-1].mean()
-                    if avg_body > 0:
-                        for lb in range(1, 4):
-                            if lb > len(m5_recent):
-                                break
-                            rc = m5_recent.iloc[-lb]
-                            rc_body = abs(rc["close"] - rc["open"])
-                            rc_range = rc["high"] - rc["low"]
-                            if rc_range <= 0:
-                                continue
-                            if rc_body / avg_body >= impulse_multiplier and rc_body / rc_range >= 0.70:
-                                is_bull = rc["close"] > rc["open"]
-                                if signal["type"] == "SELL" and is_bull:
-                                    dx.setdefault("impulse_block", 0)
-                                    dx["impulse_block"] += 1
-                                    signal = None
-                                    break
-                                elif signal["type"] == "BUY" and not is_bull:
-                                    dx.setdefault("impulse_block", 0)
-                                    dx["impulse_block"] += 1
-                                    signal = None
-                                    break
-
-            # ══════════════════════════════════════════════════
-            # FINAL VALIDATION: LTF Confirmations
-            # ══════════════════════════════════════════════════
+            # Quant signal
+            signal = detect_quant_signal_bt(df_m5, ts, symbol, pip_size)
             if signal is None:
                 dx["no_signal"] += 1
 
             if signal is not None:
-                confirms = count_ltf_confirmations(df_m5, ts, signal["type"])
-                if confirms < config.MIN_CONFIRMATIONS:
+                required_confirms = getattr(
+                    config, "QUANT_MIN_CONFIRMATIONS", config.MIN_CONFIRMATIONS)
+                if signal.get("confirmations", 0) < required_confirms:
                     dx["confirm_fail"] += 1
-                    signal = None  # Not enough confluences
+                    signal = None
 
             # ══════════════════════════════════════════════════
             # OPEN TRADE
             # ══════════════════════════════════════════════════
             if signal is not None:
-                # --- Minimum SL enforcement (matches live strategy.py) ---
-                sl_pips_raw = abs(signal["entry"] - signal["sl"]) / pip_size
-                min_sl = getattr(config, "MIN_SL_PIPS_XAU", 50.0) if "XAU" in symbol else \
-                         getattr(config, "MIN_SL_PIPS", 15.0)
-
-                if sl_pips_raw < min_sl:
-                    sl_dist_new = min_sl * pip_size
-                    if signal["type"] == "BUY":
-                        signal["sl"] = signal["entry"] - sl_dist_new
-                        signal["tp"] = signal["entry"] + sl_dist_new * config.TP_RATIO
-                    else:
-                        signal["sl"] = signal["entry"] + sl_dist_new
-                        signal["tp"] = signal["entry"] - sl_dist_new * config.TP_RATIO
-
                 dx["trades_opened"] += 1
                 _ticket_counter += 1
                 risk_dist = abs(signal["entry"] - signal["sl"])
@@ -874,13 +630,10 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                     tp=signal["tp"],
                     risk_distance=risk_dist,
                     pip_size=pip_size,
-                    strategy=signal.get("strategy", "SMC"),
+                    strategy=signal.get("strategy", "QUANT"),
                     entry_time=ts,
-                    trailing_extreme=signal["entry"],
                 )
                 open_trades.append(new_trade)
-                last_sweep_type = None
-                sweep_expiry = datetime.min
 
     # Close any remaining open trades at last price (end of period)
     for trade in open_trades:
@@ -895,8 +648,10 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                     p_pips = (trade.entry - exit_p) / trade.pip_size
 
                 sl_pips = trade.risk_distance / trade.pip_size
-                gross = (p_pips / sl_pips) * RISK_PER_TRADE * trade.remaining_volume_pct if sl_pips > 0 else 0
-                net = gross - (COMMISSION_PER_LOT * trade.remaining_volume_pct * 0.5)
+                gross = (p_pips / sl_pips) * RISK_PER_TRADE * \
+                    trade.remaining_volume_pct if sl_pips > 0 else 0
+                net = gross - (COMMISSION_PER_LOT *
+                               trade.remaining_volume_pct * 0.5)
 
                 all_closed_trades.append(ClosedTrade(
                     time=df_m5_all.index[-1], symbol=trade.symbol,
@@ -912,10 +667,6 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
 # ══════════════════════════════════════════════════════════════════════════════
 # PROGRESS BAR UTILITIES
 # ══════════════════════════════════════════════════════════════════════════════
-
-import time as _time
-import sys as _sys
-import os as _os
 
 
 def _progress_bar(current, total, prefix="", width=40, start_time=None):
@@ -933,7 +684,8 @@ def _progress_bar(current, total, prefix="", width=40, start_time=None):
         else:
             eta_str = f" ETA: {eta:.0f}s"
 
-    _sys.stdout.write(f"\r  {prefix} |{bar}| {pct*100:5.1f}% ({current}/{total}){eta_str}   ")
+    _sys.stdout.write(
+        f"\r  {prefix} |{bar}| {pct*100:5.1f}% ({current}/{total}){eta_str}   ")
     _sys.stdout.flush()
     if current >= total:
         print()
@@ -980,7 +732,8 @@ def generate_advanced_report(all_trades, test_months, report_path):
 
     gross_wins = sum(t.net_pnl for t in wins) if wins else 0
     gross_losses = abs(sum(t.net_pnl for t in losses)) if losses else 1
-    profit_factor = gross_wins / gross_losses if gross_losses > 0 else float('inf')
+    profit_factor = gross_wins / \
+        gross_losses if gross_losses > 0 else float('inf')
 
     out("\n  1. PERFORMANCE SUMMARY")
     out("  " + "-" * 50)
@@ -1076,7 +829,8 @@ def generate_advanced_report(all_trades, test_months, report_path):
         if t.net_pnl > 0:
             sym_stats[s]["wins"] += 1
 
-    sorted_symbols = sorted(sym_stats.items(), key=lambda x: x[1]["net"], reverse=True)
+    sorted_symbols = sorted(
+        sym_stats.items(), key=lambda x: x[1]["net"], reverse=True)
 
     out("\n  5. SYMBOL PERFORMANCE")
     out("  " + "-" * 55)
@@ -1086,20 +840,6 @@ def generate_advanced_report(all_trades, test_months, report_path):
         swr = stats["wins"] / stats["trades"] * 100 if stats["trades"] else 0
         status = "PROFIT" if stats["net"] > 0 else "LOSS"
         out(f"  {sym:<12} | {stats['trades']:>6} | {swr:>5.1f}% | ${stats['net']:>+9.2f} | {status}")
-
-    # Checkpoint TP
-    cp_counts = {"TP1": 0, "TP2": 0, "TP3": 0}
-    for t in all_trades:
-        for cp in t.partial_exits:
-            if cp in cp_counts:
-                cp_counts[cp] += 1
-
-    if any(v > 0 for v in cp_counts.values()):
-        out("\n  6. CHECKPOINT TP EFFECTIVENESS")
-        out("  " + "-" * 50)
-        for cp, count in cp_counts.items():
-            pct = count / total_trades * 100 if total_trades else 0
-            out(f"  {cp} Hit:          {count} times ({pct:.1f}% of trades)")
 
     # Daily Analysis
     daily_pnl = {}
@@ -1170,15 +910,20 @@ def generate_advanced_report(all_trades, test_months, report_path):
 
     issues = []
     if win_rate < 40:
-        issues.append(f"Low win rate ({win_rate:.0f}%) - entries may need better timing")
+        issues.append(
+            f"Low win rate ({win_rate:.0f}%) - entries may need better timing")
     if profit_factor < 1.0:
-        issues.append(f"Profit factor < 1 ({profit_factor:.2f}) - losing system")
+        issues.append(
+            f"Profit factor < 1 ({profit_factor:.2f}) - losing system")
     elif profit_factor < 1.5:
-        issues.append(f"Profit factor weak ({profit_factor:.2f}) - target > 1.5")
+        issues.append(
+            f"Profit factor weak ({profit_factor:.2f}) - target > 1.5")
     if max_drawdown_pct > 10:
-        issues.append(f"High drawdown ({max_drawdown_pct:.1f}%) - risk management review needed")
+        issues.append(
+            f"High drawdown ({max_drawdown_pct:.1f}%) - risk management review needed")
     if expectancy < 0:
-        issues.append(f"Negative expectancy (${expectancy:+.2f}/trade) - NOT viable")
+        issues.append(
+            f"Negative expectancy (${expectancy:+.2f}/trade) - NOT viable")
     if total_trades < 10:
         issues.append(f"Too few trades ({total_trades}) - insufficient data")
 
@@ -1239,9 +984,10 @@ def run_backtest():
     print(f"  Period:          Last {DAYS_BACK} days")
     print(f"  Risk/Trade:      {config.MAX_RISK_PER_TRADE_PCT}%")
     print(f"  Min RR:          1:{config.MIN_RISK_REWARD_RATIO}")
-    print(f"  Confirmations:   >= {config.MIN_CONFIRMATIONS}")
-    print(f"  News Filter:     {'ON' if getattr(config, 'ENABLE_NEWS_FILTER', False) else 'OFF'}")
-    print(f"  Checkpoint TP:   {'ON' if getattr(config, 'ENABLE_CHECKPOINT_TP', False) else 'OFF'}")
+    print(
+        f"  Quant confirms:  >= {getattr(config, 'QUANT_MIN_CONFIRMATIONS', config.MIN_CONFIRMATIONS)}")
+    print(
+        f"  News Filter:     {'ON' if getattr(config, 'ENABLE_NEWS_FILTER', False) else 'OFF'}")
     print(f"  Max Open Trades: {config.MAX_OPEN_TRADES}")
     print(f"  Symbols:         {len(config.SYMBOLS)}")
     print("=" * 70)
@@ -1255,13 +1001,15 @@ def run_backtest():
     load_start = _time.time()
 
     for idx, symbol in enumerate(config.SYMBOLS):
-        _progress_bar(idx, len(config.SYMBOLS), prefix="Data    ", start_time=load_start)
+        _progress_bar(idx, len(config.SYMBOLS),
+                      prefix="Data    ", start_time=load_start)
         df_m5, df_h1, df_m15 = get_symbol_data(symbol, days_back=DAYS_BACK)
         if df_m5 is not None and not df_m5.empty:
             symbol_data_cache[symbol] = (df_m5, df_h1, df_m15)
             total_min_date = min(total_min_date, df_m5.index.min())
 
-    _progress_bar(len(config.SYMBOLS), len(config.SYMBOLS), prefix="Data    ", start_time=load_start)
+    _progress_bar(len(config.SYMBOLS), len(config.SYMBOLS),
+                  prefix="Data    ", start_time=load_start)
     print(f"  Loaded {len(symbol_data_cache)}/{len(config.SYMBOLS)} symbols")
 
     if not symbol_data_cache:
@@ -1271,10 +1019,12 @@ def run_backtest():
 
     # Generate months
     test_months = []
-    curr = total_min_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    curr = total_min_date.replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0)
     now = datetime.now()
     while curr <= now:
-        month_end = curr.replace(day=calendar.monthrange(curr.year, curr.month)[1], hour=23, minute=59)
+        month_end = curr.replace(day=calendar.monthrange(
+            curr.year, curr.month)[1], hour=23, minute=59)
         test_months.append((curr, month_end))
         next_m = curr.month + 1
         next_y = curr.year
@@ -1293,9 +1043,11 @@ def run_backtest():
     diagnostics = {}
 
     for month_idx, (m_start, m_end) in enumerate(test_months):
-        _progress_bar(month_idx, len(test_months), prefix="Backtest", start_time=bt_start)
+        _progress_bar(month_idx, len(test_months),
+                      prefix="Backtest", start_time=bt_start)
 
-        trades = run_monthly_backtest(symbol_data_cache, m_start, m_end, diagnostics)
+        trades = run_monthly_backtest(
+            symbol_data_cache, m_start, m_end, diagnostics)
         all_trades_combined.extend(trades)
 
         gross = sum(t.gross_pnl for t in trades)
@@ -1305,7 +1057,8 @@ def run_backtest():
 
         strat_breakdown = {}
         for t in trades:
-            strat_breakdown[t.strategy] = strat_breakdown.get(t.strategy, 0) + 1
+            strat_breakdown[t.strategy] = strat_breakdown.get(
+                t.strategy, 0) + 1
 
         monthly_results.append({
             "month": m_start.strftime("%b %Y"),
@@ -1317,7 +1070,8 @@ def run_backtest():
             "strats": strat_breakdown,
         })
 
-    _progress_bar(len(test_months), len(test_months), prefix="Backtest", start_time=bt_start)
+    _progress_bar(len(test_months), len(test_months),
+                  prefix="Backtest", start_time=bt_start)
     elapsed = _time.time() - bt_start
     print(f"  Completed in {elapsed:.1f}s ({len(all_trades_combined)} trades)")
 
@@ -1328,14 +1082,21 @@ def run_backtest():
     print("  " + "-" * 50)
     print(f"  Candles processed:   {diagnostics.get('candles', 0):>8}")
     print(f"  In session window:   {diagnostics.get('in_session', 0):>8}")
-    print(f"  News blackout:       {diagnostics.get('news_blackout', 0):>8}  (blocked)")
-    print(f"  HTF = SIDEWAYS:      {diagnostics.get('htf_sideways', 0):>8}  (blocked)")
-    print(f"  Market sideways:     {diagnostics.get('mkt_sideways', 0):>8}  (blocked)")
-    print(f"  Correlation block:   {diagnostics.get('corr_block', 0):>8}  (blocked)")
-    print(f"  Concurrent block:    {diagnostics.get('concurrent_block', 0):>8}  (blocked)")
+    print(
+        f"  News blackout:       {diagnostics.get('news_blackout', 0):>8}  (blocked)")
+    print(
+        f"  HTF = SIDEWAYS:      {diagnostics.get('htf_sideways', 0):>8}  (blocked)")
+    print(
+        f"  Market sideways:     {diagnostics.get('mkt_sideways', 0):>8}  (blocked)")
+    print(
+        f"  Correlation block:   {diagnostics.get('corr_block', 0):>8}  (blocked)")
+    print(
+        f"  Concurrent block:    {diagnostics.get('concurrent_block', 0):>8}  (blocked)")
     print(f"  No signal generated: {diagnostics.get('no_signal', 0):>8}")
-    print(f"  Impulse blocked:     {diagnostics.get('impulse_block', 0):>8}  (blocked)")
-    print(f"  Confirm fail (<{config.MIN_CONFIRMATIONS}):  {diagnostics.get('confirm_fail', 0):>8}  (blocked)")
+    print(
+        f"  Impulse blocked:     {diagnostics.get('impulse_block', 0):>8}  (blocked)")
+    print(
+        f"  Confirm fail (<{config.MIN_CONFIRMATIONS}):  {diagnostics.get('confirm_fail', 0):>8}  (blocked)")
     print(f"  Trades opened:       {diagnostics.get('trades_opened', 0):>8}")
 
     # Phase 3: Monthly Table
@@ -1345,7 +1106,8 @@ def run_backtest():
     print("  " + "-" * 85)
 
     for mr in monthly_results:
-        strat_str = " ".join(f"{k}:{v}" for k, v in sorted(mr["strats"].items()))
+        strat_str = " ".join(
+            f"{k}:{v}" for k, v in sorted(mr["strats"].items()))
         print(
             f"  {mr['month']:<10} | {mr['trades']:>6} | {mr['wr']:>5.1f}% | "
             f"${mr['gross']:>+9.2f} | ${mr['net']:>+9.2f} | {strat_str}"
@@ -1361,4 +1123,3 @@ def run_backtest():
 
 if __name__ == "__main__":
     run_backtest()
-
