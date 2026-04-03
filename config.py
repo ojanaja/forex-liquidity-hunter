@@ -104,7 +104,7 @@ QUANT_ZSCORE_WINDOW = 80
 
 QUANT_VOL_SHORT_WINDOW = 24
 QUANT_VOL_LONG_WINDOW = 96
-QUANT_MAX_VOL_RATIO = 1.15
+QUANT_MAX_VOL_RATIO = 1.05
 QUANT_REQUIRE_TREND_MOM_ALIGNMENT = True
 
 QUANT_W_TREND = 0.45
@@ -112,9 +112,9 @@ QUANT_W_MOMENTUM = 0.35
 QUANT_W_MEAN_REVERSION = 0.20
 QUANT_W_VOL_PENALTY = 0.25
 
-QUANT_SCORE_ENTRY_THRESHOLD = 0.42
+QUANT_SCORE_ENTRY_THRESHOLD = 0.52
 QUANT_ATR_SL_MULTIPLIER = 2.2
-QUANT_TP_R_MULTIPLIER = 1.6
+QUANT_TP_R_MULTIPLIER = 2.2
 
 # Optional per-symbol overrides for quant parameters.
 # Use exact symbol names from SYMBOLS.
@@ -123,15 +123,22 @@ QUANT_SYMBOL_OVERRIDES = {
         "QUANT_W_TREND": 0.55,
         "QUANT_W_MOMENTUM": 0.25,
         "QUANT_W_MEAN_REVERSION": 0.20,
-        "QUANT_W_VOL_PENALTY": 0.35,
-        "QUANT_SCORE_ENTRY_THRESHOLD": 0.48,
+        "QUANT_W_VOL_PENALTY": 0.40,
+        "QUANT_SCORE_ENTRY_THRESHOLD": 0.58,
         "QUANT_ATR_SL_MULTIPLIER": 2.8,
+        "QUANT_MAX_VOL_RATIO": 0.95,
     },
     "GBPJPYx": {
         "QUANT_W_TREND": 0.50,
         "QUANT_W_MOMENTUM": 0.35,
         "QUANT_W_MEAN_REVERSION": 0.15,
-        "QUANT_SCORE_ENTRY_THRESHOLD": 0.30,
+        "QUANT_SCORE_ENTRY_THRESHOLD": 0.55,
+        "QUANT_W_VOL_PENALTY": 0.35,
+        "QUANT_MAX_VOL_RATIO": 1.00,
+    },
+    "EURGBPx": {
+        "QUANT_SCORE_ENTRY_THRESHOLD": 0.55,
+        "QUANT_MAX_VOL_RATIO": 0.95,
     },
 }
 
@@ -146,7 +153,7 @@ QUANT_CSV_DATA_DIR = "data"
 
 # --- Elliott Wave Parameters ---
 ENABLE_ELLIOTT_WAVE = True
-EW_ZIGZAG_DEPTH = 8        # Min bars between swings
+EW_ZIGZAG_DEPTH = 8         # Min bars between swings
 EW_MIN_WAVE1_PIPS = 10.0     # Min Wave 1 size in pips
 EW_WAVE2_RETRACE_MIN = 0.382    # Min Fibonacci retracement (38.2%)
 EW_WAVE2_RETRACE_MAX = 0.786    # Max Fibonacci retracement (78.6%)
@@ -154,8 +161,12 @@ EW_LOOKBACK_BARS = 120      # M15 bars to analyze (120 × 15min = 30h)
 EW_MAX_SL_PIPS = 50.0     # Max SL for EW trades
 
 # --- Minimum Risk Reward (Req #7) ---
-# Minimum 1:1.6 RR required (matches quant TP multiplier)
-MIN_RISK_REWARD_RATIO = 1.6
+# Minimum 1:2.0 RR required (matches quant TP multiplier)
+MIN_RISK_REWARD_RATIO = 2.0
+
+# --- Minimum Factor Strengths (blocks weak/marginal signals) ---
+QUANT_MIN_TREND_STRENGTH = 0.15    # Min |trend_factor| to consider
+QUANT_MIN_MOM_ZSCORE = 0.3         # Min |momentum z-score| to consider
 
 # =============================================================================
 # BREAKEVEN + PARTIAL TP SYSTEM
@@ -196,9 +207,8 @@ MAX_POSITIONS_PER_CORRELATION_GROUP = 1
 # SESSION WINDOWS (UTC+7 / WIB)
 # =============================================================================
 SESSIONS = [
-    ("Tokyo",   7,  0,   9,  0),   # 07:00 - 09:00 WIB
-    ("London", 15,  0,  17,  0),   # 15:00 - 17:00 WIB
-    ("NewYork", 20,  0,  22,  0),  # 20:00 - 22:00 WIB
+    ("London",  14,  0,  18,  0),   # 14:00 - 18:00 WIB
+    ("NewYork", 19,  0,  23,  0),   # 19:00 - 23:00 WIB
 ]
 TIMEZONE = "Asia/Jakarta"  # UTC+7
 
@@ -226,7 +236,7 @@ NEWS_AFFECTED_CURRENCIES = [       # Currencies we care about
 # =============================================================================
 DRY_RUN = True                     # SAFETY: validate strategy before risking real $
 MAX_SPREAD_PIPS = 80.0             # Max allowed spread (80.0 for Gold)
-TRADE_COOLDOWN_MINUTES = 30        # Prevent rapid re-entry on same symbol
+TRADE_COOLDOWN_MINUTES = 60        # Prevent rapid re-entry on same symbol
 SCAN_INTERVAL_SECONDS = 10         # How often to check for signals
 SUMMARY_LOG_INTERVAL_SECONDS = 300  # 5 minutes
 

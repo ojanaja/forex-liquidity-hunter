@@ -272,6 +272,11 @@ def _build_quant_signal(symbol: str, pip_size: float) -> Optional[Signal]:
     trend_raw = (ema_fast.iloc[-1] - ema_slow.iloc[-1]) / atr
     trend_factor = _clamp(float(trend_raw), -3.0, 3.0) / 3.0
 
+    # Reject if trend is too weak
+    min_trend = float(_quant_param(symbol, "QUANT_MIN_TREND_STRENGTH", 0.15))
+    if abs(trend_factor) < min_trend:
+        return None
+
     mom_short_bars = int(_quant_param(symbol, "QUANT_MOMENTUM_SHORT_BARS", 12))
     mom_long_bars = int(_quant_param(symbol, "QUANT_MOMENTUM_LONG_BARS", 48))
     z_window = int(_quant_param(symbol, "QUANT_ZSCORE_WINDOW", 80))
@@ -284,6 +289,12 @@ def _build_quant_signal(symbol: str, pip_size: float) -> Optional[Signal]:
         -3.0,
         3.0,
     ) / 3.0
+
+    # Reject if momentum is too weak
+    min_mom = float(_quant_param(symbol, "QUANT_MIN_MOM_ZSCORE", 0.3))
+    mom_z_raw = _latest_zscore(mom_spread, z_window)
+    if abs(mom_z_raw) < min_mom:
+        return None
 
     mean_window = int(_quant_param(symbol, "QUANT_MEAN_WINDOW", 60))
     rolling_mean = close.rolling(window=mean_window).mean()

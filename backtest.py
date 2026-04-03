@@ -297,6 +297,11 @@ def detect_quant_signal_bt(df_m5: pd.DataFrame, ts, symbol: str, pip_size: float
     trend_norm = float((ema_fast.iloc[-1] - ema_slow.iloc[-1]) / atr)
     trend_factor = max(-3.0, min(3.0, trend_norm)) / 3.0
 
+    # Reject if trend is too weak
+    min_trend = float(_qparam(symbol, "QUANT_MIN_TREND_STRENGTH", 0.15))
+    if abs(trend_factor) < min_trend:
+        return None
+
     mom_short = close.pct_change(
         int(_qparam(symbol, "QUANT_MOMENTUM_SHORT_BARS", 12)))
     mom_long = close.pct_change(
@@ -305,6 +310,11 @@ def detect_quant_signal_bt(df_m5: pd.DataFrame, ts, symbol: str, pip_size: float
     mom_z = _latest_zscore(mom_spread, int(
         _qparam(symbol, "QUANT_ZSCORE_WINDOW", 80)))
     momentum_factor = max(-3.0, min(3.0, mom_z)) / 3.0
+
+    # Reject if momentum is too weak
+    min_mom = float(_qparam(symbol, "QUANT_MIN_MOM_ZSCORE", 0.3))
+    if abs(mom_z) < min_mom:
+        return None
 
     mean_window = int(_qparam(symbol, "QUANT_MEAN_WINDOW", 60))
     mean = close.rolling(window=mean_window).mean().iloc[-1]
@@ -586,7 +596,7 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
 
             # ── Session window check ──
             in_window = ("14:00" <= t_str <= "18:00") or (
-                "19:00" <= t_str <= "22:59")
+                "19:00" <= t_str <= "23:00")
             if not in_window:
                 continue
 
@@ -993,7 +1003,7 @@ def run_backtest():
         print("Failed to connect to MT5.")
         return
 
-    DAYS_BACK = 90
+    DAYS_BACK = 30
     print()
     print("=" * 70)
     print("  FOREX LIQUIDITY HUNTER V18 - REALISTIC BACKTEST ENGINE")
