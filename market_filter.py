@@ -552,10 +552,24 @@ def validate_entry(
             if not corr_ok:
                 return False, corr_reason
 
+        # --- H1 Momentum Alignment ---
+        # Current H1 candle must close in signal direction
+        h1_df = mt5_bridge.get_ohlc(
+            symbol, timeframe_minutes=config.HTF_TIMEFRAME_MINUTES, count=3)
+        if h1_df is not None and len(h1_df) >= 1:
+            h1_candle = h1_df.iloc[-1]
+            h1_bullish = h1_candle["close"] > h1_candle["open"]
+            if (direction == "BUY" and not h1_bullish) or \
+               (direction == "SELL" and h1_bullish):
+                return False, (
+                    f"H1 momentum misaligned: candle is "
+                    f"{'bullish' if h1_bullish else 'bearish'} vs {direction}"
+                )
+
         conditions_msg = (
             f"HTF Trend: {htf_trend} | "
             f"Quant confirms ({confirms}/4): {', '.join(confirm_reasons) if confirm_reasons else 'None'} | "
-            f"RR: {rr_ratio:.2f}"
+            f"RR: {rr_ratio:.2f} | H1 aligned"
         )
         logger.info(
             f"[VALIDATE-QUANT] {symbol} {direction}: ALL CHECKS PASSED "

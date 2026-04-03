@@ -362,6 +362,26 @@ def detect_quant_signal_bt(df_m5: pd.DataFrame, ts, symbol: str, pip_size: float
         return None
 
     direction = "BUY" if score > 0 else "SELL"
+
+    # ── Strategy Filter 1: M5 Trend Consistency ──
+    # Require 50%+ of last 10 closes on correct side of fast EMA
+    last_10_close = close.iloc[-10:]
+    last_10_ema = ema_fast.iloc[-10:]
+    if direction == "BUY":
+        trend_support = float((last_10_close > last_10_ema).sum()) / 10.0
+    else:
+        trend_support = float((last_10_close < last_10_ema).sum()) / 10.0
+    if trend_support < 0.50:
+        return None
+
+    # ── Strategy Filter 2: Volatility Spike Rejection ──
+    # Don't enter on abnormally large candles (likely news/liquidity spike)
+    candle_ranges = (m5_slice["high"] - m5_slice["low"]).iloc[-20:]
+    current_range = float(candle_ranges.iloc[-1])
+    avg_range = float(candle_ranges.iloc[:-1].mean())
+    if avg_range > 0 and current_range > 2.5 * avg_range:
+        return None
+
     entry = float(close.iloc[-1])
     sl_dist = max(float(_qparam(symbol, "QUANT_ATR_SL_MULTIPLIER", 1.8)) * float(atr),
                   (getattr(config, "MIN_SL_PIPS_XAU", 50.0) if "XAU" in symbol else getattr(config, "MIN_SL_PIPS", 15.0)) * pip_size)
@@ -638,6 +658,18 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                 if signal.get("confirmations", 0) < required_confirms:
                     dx["confirm_fail"] += 1
                     signal = None
+
+            # --- Strategy Filter 3: H1 Momentum Alignment ---
+            # Current H1 candle must close in signal direction
+            if signal is not None:
+                h1_at_entry = df_h1.loc[:ts].tail(2)
+                if len(h1_at_entry) >= 1:
+                    h1_candle = h1_at_entry.iloc[-1]
+                    h1_bullish = h1_candle["close"] > h1_candle["open"]
+                    if (signal["type"] == "BUY" and not h1_bullish) or \
+                       (signal["type"] == "SELL" and h1_bullish):
+                        dx["h1_block"] = dx.get("h1_block", 0) + 1
+                        signal = None
 
             # ══════════════════════════════════════════════════
             # OPEN TRADE
@@ -1124,6 +1156,8 @@ def run_backtest():
         f"  Impulse blocked:     {diagnostics.get('impulse_block', 0):>8}  (blocked)")
     print(
         f"  Confirm fail (<{config.MIN_CONFIRMATIONS}):  {diagnostics.get('confirm_fail', 0):>8}  (blocked)")
+    print(
+        f"  H1 momentum block:   {diagnostics.get('h1_block', 0):>8}  (blocked)")
     print(f"  Trades opened:       {diagnostics.get('trades_opened', 0):>8}")
 
     # Phase 3: Monthly Table

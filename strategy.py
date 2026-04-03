@@ -349,6 +349,25 @@ def _build_quant_signal(symbol: str, pip_size: float) -> Optional[Signal]:
         return None
 
     direction = "BUY" if score > 0 else "SELL"
+
+    # ── Strategy Filter 1: M5 Trend Consistency ──
+    # Require 50%+ of last 10 closes on correct side of fast EMA
+    last_10_close = close.iloc[-10:]
+    last_10_ema = ema_fast.iloc[-10:]
+    if direction == "BUY":
+        trend_support = float((last_10_close > last_10_ema).sum()) / 10.0
+    else:
+        trend_support = float((last_10_close < last_10_ema).sum()) / 10.0
+    if trend_support < 0.50:
+        return None
+
+    # ── Strategy Filter 2: Volatility Spike Rejection ──
+    candle_ranges = (df["high"] - df["low"]).iloc[-20:]
+    current_range = float(candle_ranges.iloc[-1])
+    avg_range = float(candle_ranges.iloc[:-1].mean())
+    if avg_range > 0 and current_range > 2.5 * avg_range:
+        return None
+
     entry = prices["ask"] if direction == "BUY" else prices["bid"]
 
     sl_atr = float(_quant_param(
