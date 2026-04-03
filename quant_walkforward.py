@@ -234,11 +234,23 @@ def _build_features(df: pd.DataFrame, symbol: str, weights: dict) -> pd.DataFram
         (weights["mr"] * out["mr"])
     )
     penalty = weights["vol_penalty"] * out["vol_penalty"]
-    
-    out["score"] = np.where(raw_score > 0, 
-                            np.maximum(0.0, raw_score - penalty), 
-                            np.minimum(0.0, raw_score + penalty))
 
+    out["score"] = np.where(
+        raw_score > 0,
+        np.maximum(0.0, raw_score - penalty),
+        np.minimum(0.0, raw_score + penalty),
+    )
+
+    max_vol_ratio = float(_get_override(symbol, "QUANT_MAX_VOL_RATIO", 1.15))
+    require_alignment = bool(_get_override(
+        symbol, "QUANT_REQUIRE_TREND_MOM_ALIGNMENT", True))
+    vol_ratio_series = out["vol_penalty"] + 1.0
+    out = out[vol_ratio_series <= max_vol_ratio]
+
+    if require_alignment:
+        direction = np.sign(out["score"])
+        out = out[(direction != 0) & (out["trend"] * direction > 0) &
+                  (out["mom"] * direction > 0)]
 
     return out.dropna().reset_index(drop=True)
 

@@ -45,7 +45,7 @@ HTF_STRUCTURE_LOOKBACK = 20       # Candles to detect HH/HL/LH/LL
 # LTF CONFIRMATION (Req #2)
 # =============================================================================
 LTF_TIMEFRAME_MINUTES = 5        # M5 for entry timing
-MIN_CONFIRMATIONS = 3        # 3 confluences for high-quality entries
+MIN_CONFIRMATIONS = 4        # Require full quant confluence for higher win quality
 
 # =============================================================================
 # SIDEWAYS DETECTION (Req #3) — ATR + Bollinger Band Squeeze
@@ -104,15 +104,17 @@ QUANT_ZSCORE_WINDOW = 80
 
 QUANT_VOL_SHORT_WINDOW = 24
 QUANT_VOL_LONG_WINDOW = 96
+QUANT_MAX_VOL_RATIO = 1.15
+QUANT_REQUIRE_TREND_MOM_ALIGNMENT = True
 
 QUANT_W_TREND = 0.45
 QUANT_W_MOMENTUM = 0.35
 QUANT_W_MEAN_REVERSION = 0.20
 QUANT_W_VOL_PENALTY = 0.25
 
-QUANT_SCORE_ENTRY_THRESHOLD = 0.35
-QUANT_ATR_SL_MULTIPLIER = 2.0
-QUANT_TP_R_MULTIPLIER = 1.8
+QUANT_SCORE_ENTRY_THRESHOLD = 0.42
+QUANT_ATR_SL_MULTIPLIER = 2.2
+QUANT_TP_R_MULTIPLIER = 1.6
 
 # Optional per-symbol overrides for quant parameters.
 # Use exact symbol names from SYMBOLS.
@@ -122,8 +124,8 @@ QUANT_SYMBOL_OVERRIDES = {
         "QUANT_W_MOMENTUM": 0.25,
         "QUANT_W_MEAN_REVERSION": 0.20,
         "QUANT_W_VOL_PENALTY": 0.35,
-        "QUANT_SCORE_ENTRY_THRESHOLD": 0.35,
-        "QUANT_ATR_SL_MULTIPLIER": 2.5,
+        "QUANT_SCORE_ENTRY_THRESHOLD": 0.48,
+        "QUANT_ATR_SL_MULTIPLIER": 2.8,
     },
     "GBPJPYx": {
         "QUANT_W_TREND": 0.50,
@@ -152,7 +154,8 @@ EW_LOOKBACK_BARS = 120      # M15 bars to analyze (120 × 15min = 30h)
 EW_MAX_SL_PIPS = 50.0     # Max SL for EW trades
 
 # --- Minimum Risk Reward (Req #7) ---
-MIN_RISK_REWARD_RATIO = 1.5       # Minimum 1:1.5 RR required (matches TP_RATIO)
+# Minimum 1:1.6 RR required (matches quant TP multiplier)
+MIN_RISK_REWARD_RATIO = 1.6
 
 # =============================================================================
 # BREAKEVEN + PARTIAL TP SYSTEM

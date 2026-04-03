@@ -323,12 +323,29 @@ def detect_quant_signal_bt(df_m5: pd.DataFrame, ts, symbol: str, pip_size: float
     vol_ratio = float(vol_short / vol_long)
     vol_penalty = max(0.0, vol_ratio - 1.0)
 
+    max_vol_ratio = float(_qparam(symbol, "QUANT_MAX_VOL_RATIO", 1.15))
+    if vol_ratio > max_vol_ratio:
+        return None
+
     w_trend = float(_qparam(symbol, "QUANT_W_TREND", 0.45))
     w_mom = float(_qparam(symbol, "QUANT_W_MOMENTUM", 0.35))
     w_mr = float(_qparam(symbol, "QUANT_W_MEAN_REVERSION", 0.20))
     w_vol = float(_qparam(symbol, "QUANT_W_VOL_PENALTY", 0.25))
-    score = (w_trend * trend_factor) + (w_mom * momentum_factor) + \
-        (w_mr * mean_reversion_factor) - (w_vol * vol_penalty)
+    raw_score = (w_trend * trend_factor) + (w_mom * momentum_factor) + \
+        (w_mr * mean_reversion_factor)
+    penalty = w_vol * vol_penalty
+
+    if raw_score > 0:
+        score = max(0.0, raw_score - penalty)
+    else:
+        score = min(0.0, raw_score + penalty)
+
+    if bool(_qparam(symbol, "QUANT_REQUIRE_TREND_MOM_ALIGNMENT", True)):
+        if score == 0.0:
+            return None
+        directional = 1.0 if score > 0 else -1.0
+        if (trend_factor * directional) <= 0 or (momentum_factor * directional) <= 0:
+            return None
 
     threshold = float(_qparam(symbol, "QUANT_SCORE_ENTRY_THRESHOLD", 0.20))
     if abs(score) < threshold:
@@ -352,7 +369,7 @@ def detect_quant_signal_bt(df_m5: pd.DataFrame, ts, symbol: str, pip_size: float
         confirmations += 1
     if (direction == "BUY" and mom_z > 0) or (direction == "SELL" and mom_z < 0):
         confirmations += 1
-    if vol_ratio <= 1.35:
+    if vol_ratio <= float(_qparam(symbol, "QUANT_MAX_VOL_RATIO", 1.15)):
         confirmations += 1
     if "tick_volume" in m5_slice.columns and len(m5_slice) >= 60:
         vol_mean = m5_slice["tick_volume"].rolling(window=60).mean().iloc[-1]

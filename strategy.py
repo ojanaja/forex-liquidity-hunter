@@ -303,19 +303,30 @@ def _build_quant_signal(symbol: str, pip_size: float) -> Optional[Signal]:
     vol_ratio = float(vol_short / vol_long)
     vol_penalty = max(0.0, vol_ratio - 1.0)
 
+    max_vol_ratio = float(_quant_param(symbol, "QUANT_MAX_VOL_RATIO", 1.15))
+    if vol_ratio > max_vol_ratio:
+        return None
+
     w_trend = float(_quant_param(symbol, "QUANT_W_TREND", 0.45))
     w_mom = float(_quant_param(symbol, "QUANT_W_MOMENTUM", 0.35))
     w_mr = float(_quant_param(symbol, "QUANT_W_MEAN_REVERSION", 0.20))
     raw_score = (w_trend * trend_factor) + (w_mom * momentum_factor) + \
         (w_mr * mean_reversion_factor)
-        
+
     penalty = float(_quant_param(symbol,
-                   "QUANT_W_VOL_PENALTY", 0.25)) * vol_penalty
-                   
+                                 "QUANT_W_VOL_PENALTY", 0.25)) * vol_penalty
+
     if raw_score > 0:
         score = max(0.0, raw_score - penalty)
     else:
         score = min(0.0, raw_score + penalty)
+
+    if bool(_quant_param(symbol, "QUANT_REQUIRE_TREND_MOM_ALIGNMENT", True)):
+        directional = 1.0 if score > 0 else -1.0
+        if score == 0.0:
+            return None
+        if (trend_factor * directional) <= 0 or (momentum_factor * directional) <= 0:
+            return None
 
     threshold = float(_quant_param(
         symbol, "QUANT_SCORE_ENTRY_THRESHOLD", 0.20))
