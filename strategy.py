@@ -306,10 +306,16 @@ def _build_quant_signal(symbol: str, pip_size: float) -> Optional[Signal]:
     w_trend = float(_quant_param(symbol, "QUANT_W_TREND", 0.45))
     w_mom = float(_quant_param(symbol, "QUANT_W_MOMENTUM", 0.35))
     w_mr = float(_quant_param(symbol, "QUANT_W_MEAN_REVERSION", 0.20))
-    score = (w_trend * trend_factor) + (w_mom * momentum_factor) + \
+    raw_score = (w_trend * trend_factor) + (w_mom * momentum_factor) + \
         (w_mr * mean_reversion_factor)
-    score -= float(_quant_param(symbol,
+        
+    penalty = float(_quant_param(symbol,
                    "QUANT_W_VOL_PENALTY", 0.25)) * vol_penalty
+                   
+    if raw_score > 0:
+        score = max(0.0, raw_score - penalty)
+    else:
+        score = min(0.0, raw_score + penalty)
 
     threshold = float(_quant_param(
         symbol, "QUANT_SCORE_ENTRY_THRESHOLD", 0.20))

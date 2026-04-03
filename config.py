@@ -20,7 +20,7 @@ MT5_PATH = os.getenv("MT5_PATH", None)  # Optional: path to terminal64.exe
 # =============================================================================
 ACCOUNT_BALANCE = 10000.0   # Actual current balance
 # 0.5% risk (only $49/trade — protect $243 buffer)
-MAX_RISK_PER_TRADE_PCT = 1.0
+MAX_RISK_PER_TRADE_PCT = 0.5
 DAILY_LOSS_LIMIT = 100.0    # Stop if down $100 in a day
 TOTAL_LOSS_LIMIT = 200.0    # Hard stop at $9,643 (safe above $9,600)
 PROFIT_TARGET = 600.0    # 6% monthly target
@@ -75,8 +75,8 @@ USE_FVG_50_ENTRY = True     # 50% Consequent Encroachment
 
 # --- Minimum SL Distance (prevents razor-thin SL) ---
 # Risk stays the same because lot size auto-adjusts: wider SL = smaller lot
-MIN_SL_PIPS = 15.0     # Min SL for forex pairs (e.g., EURUSD, GBPJPY)
-MIN_SL_PIPS_XAU = 50.0     # Min SL for XAUUSD (Gold needs more room)
+MIN_SL_PIPS = 20.0     # Min SL for forex pairs (e.g., EURUSD, GBPJPY)
+MIN_SL_PIPS_XAU = 60.0     # Min SL for XAUUSD (Gold needs more room)
 
 # --- Impulse Candle Filter (blocks entry against strong momentum) ---
 IMPULSE_BODY_MULTIPLIER = 2.0      # Candle body > 2x avg body = impulse
@@ -110,9 +110,9 @@ QUANT_W_MOMENTUM = 0.35
 QUANT_W_MEAN_REVERSION = 0.20
 QUANT_W_VOL_PENALTY = 0.25
 
-QUANT_SCORE_ENTRY_THRESHOLD = 0.20
-QUANT_ATR_SL_MULTIPLIER = 1.8
-QUANT_TP_R_MULTIPLIER = 2.0
+QUANT_SCORE_ENTRY_THRESHOLD = 0.35
+QUANT_ATR_SL_MULTIPLIER = 2.0
+QUANT_TP_R_MULTIPLIER = 1.8
 
 # Optional per-symbol overrides for quant parameters.
 # Use exact symbol names from SYMBOLS.
@@ -122,14 +122,14 @@ QUANT_SYMBOL_OVERRIDES = {
         "QUANT_W_MOMENTUM": 0.25,
         "QUANT_W_MEAN_REVERSION": 0.20,
         "QUANT_W_VOL_PENALTY": 0.35,
-        "QUANT_SCORE_ENTRY_THRESHOLD": 0.28,
-        "QUANT_ATR_SL_MULTIPLIER": 2.1,
+        "QUANT_SCORE_ENTRY_THRESHOLD": 0.35,
+        "QUANT_ATR_SL_MULTIPLIER": 2.5,
     },
     "GBPJPYx": {
         "QUANT_W_TREND": 0.50,
         "QUANT_W_MOMENTUM": 0.35,
         "QUANT_W_MEAN_REVERSION": 0.15,
-        "QUANT_SCORE_ENTRY_THRESHOLD": 0.24,
+        "QUANT_SCORE_ENTRY_THRESHOLD": 0.30,
     },
 }
 
@@ -152,7 +152,7 @@ EW_LOOKBACK_BARS = 120      # M15 bars to analyze (120 × 15min = 30h)
 EW_MAX_SL_PIPS = 50.0     # Max SL for EW trades
 
 # --- Minimum Risk Reward (Req #7) ---
-MIN_RISK_REWARD_RATIO = 2.0       # Minimum 1:2 RR required (matches TP_RATIO)
+MIN_RISK_REWARD_RATIO = 1.5       # Minimum 1:1.5 RR required (matches TP_RATIO)
 
 # =============================================================================
 # BREAKEVEN + PARTIAL TP SYSTEM

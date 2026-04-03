@@ -228,12 +228,17 @@ def _build_features(df: pd.DataFrame, symbol: str, weights: dict) -> pd.DataFram
         ret.rolling(window=vol_long).std()
     out["vol_penalty"] = (vol_ratio - 1.0).clip(lower=0.0)
 
-    out["score"] = (
+    raw_score = (
         (weights["trend"] * out["trend"]) +
         (weights["mom"] * out["mom"]) +
-        (weights["mr"] * out["mr"]) -
-        (weights["vol_penalty"] * out["vol_penalty"])
+        (weights["mr"] * out["mr"])
     )
+    penalty = weights["vol_penalty"] * out["vol_penalty"]
+    
+    out["score"] = np.where(raw_score > 0, 
+                            np.maximum(0.0, raw_score - penalty), 
+                            np.minimum(0.0, raw_score + penalty))
+
 
     return out.dropna().reset_index(drop=True)
 
