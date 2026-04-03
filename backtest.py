@@ -615,7 +615,7 @@ def run_monthly_backtest(symbol_data_cache, start_date, end_date, diagnostics=No
                 continue
 
             # ── Session window check ──
-            in_window = ("14:00" <= t_str <= "18:00") or (
+            in_window = ("13:00" <= t_str <= "18:00") or (
                 "19:00" <= t_str <= "23:00")
             if not in_window:
                 continue

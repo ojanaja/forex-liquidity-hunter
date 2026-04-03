@@ -29,7 +29,7 @@ DAILY_PROFIT_CAP = 200.0    # Consistency rule enforcement
 # =============================================================================
 # CONCURRENT TRADE LIMIT
 # =============================================================================
-MAX_OPEN_TRADES = 2             # Max simultaneous open trades
+MAX_OPEN_TRADES = 3             # Max simultaneous open trades
 
 # =============================================================================
 # HTF TREND FILTER (Req #2) — Dual EMA + Market Structure
@@ -200,7 +200,7 @@ MAX_POSITIONS_PER_CORRELATION_GROUP = 1
 # SESSION WINDOWS (UTC+7 / WIB)
 # =============================================================================
 SESSIONS = [
-    ("London",  14,  0,  18,  0),   # 14:00 - 18:00 WIB
+    ("London",  13,  0,  18,  0),   # 13:00 - 18:00 WIB (extended start)
     ("NewYork", 19,  0,  23,  0),   # 19:00 - 23:00 WIB
 ]
 TIMEZONE = "Asia/Jakarta"  # UTC+7
@@ -210,6 +210,7 @@ TIMEZONE = "Asia/Jakarta"  # UTC+7
 # =============================================================================
 SYMBOLS = [
     "EURAUDx", "EURGBPx", "GBPUSDx", "GBPJPYx", "AUDUSDx", "XAUUSDx",
+    "USDJPYx", "NZDUSDx", "EURJPYx",
 ]
 
 # =============================================================================
@@ -229,7 +230,7 @@ NEWS_AFFECTED_CURRENCIES = [       # Currencies we care about
 # =============================================================================
 DRY_RUN = True                     # SAFETY: validate strategy before risking real $
 MAX_SPREAD_PIPS = 80.0             # Max allowed spread (80.0 for Gold)
-TRADE_COOLDOWN_MINUTES = 60        # Prevent rapid re-entry on same symbol
+TRADE_COOLDOWN_MINUTES = 30        # Reduced — strategy filters are now strong enough
 SCAN_INTERVAL_SECONDS = 10         # How often to check for signals
 SUMMARY_LOG_INTERVAL_SECONDS = 300  # 5 minutes
 
