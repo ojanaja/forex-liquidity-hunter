@@ -114,7 +114,7 @@ QUANT_W_VOL_PENALTY = 0.25
 
 QUANT_SCORE_ENTRY_THRESHOLD = 0.43
 QUANT_ATR_SL_MULTIPLIER = 2.2
-QUANT_TP_R_MULTIPLIER = 2.0
+QUANT_TP_R_MULTIPLIER = 2.5
 
 # Optional per-symbol overrides for quant parameters.
 # Use exact symbol names from SYMBOLS.
@@ -132,6 +132,12 @@ QUANT_SYMBOL_OVERRIDES = {
         "QUANT_W_MOMENTUM": 0.35,
         "QUANT_W_MEAN_REVERSION": 0.15,
         "QUANT_SCORE_ENTRY_THRESHOLD": 0.40,
+    },
+    "NZDUSDx": {
+        "QUANT_SCORE_ENTRY_THRESHOLD": 0.55,
+    },
+    "GBPAUDx": {
+        "QUANT_SCORE_ENTRY_THRESHOLD": 0.55,
     },
 }
 
