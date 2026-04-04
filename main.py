@@ -262,6 +262,28 @@ def _empty_stats(risk: RiskManager) -> dict:
 
 
 # ======================================================================
+# Heartbeat for Dashboard
+# ======================================================================
+
+def _write_heartbeat(session: str, risk: RiskManager):
+    """Update heartbeat file for the web dashboard."""
+    hb_file = os.path.join(config.LOG_DIR, "heartbeat.json")
+    tz = pytz.timezone(config.TIMEZONE)
+    hb_data = {
+        "timestamp": datetime.now(tz).isoformat(),
+        "status": "running",
+        "session": session,
+        "daily_pnl": round(risk.daily_realized_pnl, 2),
+        "cumulative_pnl": round(risk.cumulative_pnl, 2),
+    }
+    try:
+        with open(hb_file, "w") as f:
+            json.dump(hb_data, f)
+    except Exception as e:
+        logger.error(f"Failed to write heartbeat: {e}")
+
+
+# ======================================================================
 # Main Loop
 # ======================================================================
 
@@ -355,6 +377,9 @@ def main():
                 session = f"Global_{datetime.now(tz).strftime('%H')}"
 
             logger.info(f"Scanning... [Session: {session}]")
+
+            # --- Update Heartbeat ---
+            _write_heartbeat(session, risk)
 
             # === SCHEDULED REPORTS (check every cycle) ===
             tz = pytz.timezone(config.TIMEZONE)

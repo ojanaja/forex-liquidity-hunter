@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Forex Liquidity Hunter — Monitoring Dashboard</title>
+    <!-- Google Font: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-body: #0b0e14;
+            --bg-card: #151a24;
+            --bg-header: #1c2331;
+            --primary: #3b82f6;
+            --accent: #10b981;
+            --danger: #ef4444;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border-color: #2d3748;
+            --glass-bg: rgba(21, 26, 36, 0.8);
+            --glass-border: rgba(255, 255, 255, 0.05);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            overflow-x: hidden;
+            line-height: 1.5;
+        }
+
+        /* Layout */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .logo-area {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo-text {
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+            background: linear-gradient(to right, var(--primary), #6366f1);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            background: var(--bg-header);
+            border: 1px solid var(--border-color);
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--text-muted);
+        }
+
+        .status-dot.active {
+            background: var(--accent);
+            box-shadow: 0 0 10px var(--accent);
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.inactive { background: var(--danger); }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.2); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        /* Stats Cards */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--glass-border);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            transition: transform 0.2s;
+        }
+
+        .stat-card:hover { border-color: var(--primary); transform: translateY(-2px); }
+
+        .stat-label {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-value { font-size: 1.75rem; font-weight: 700; }
+
+        .stat-value.up { color: var(--accent); }
+        .stat-value.down { color: var(--danger); }
+
+        /* Charts */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 1.5fr 1fr;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--glass-border);
+            border-radius: 1rem;
+            padding: 1.5rem;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .card-title { font-size: 1rem; font-weight: 600; color: var(--text-muted); }
+
+        /* Tables */
+        .table-area { margin-bottom: 2rem; }
+
+        .table-wrapper {
+            background: var(--bg-card);
+            border-radius: 1rem;
+            border: 1px solid var(--glass-border);
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+            text-align: left;
+        }
+
+        th {
+            background: rgba(255, 255, 255, 0.02);
+            padding: 1rem;
+            color: var(--text-muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.025em;
+            font-size: 0.75rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        td { padding: 1rem; border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
+
+        tr:last-child td { border-bottom: none; }
+
+        .badge-buy { color: var(--accent); font-weight: bold; }
+        .badge-sell { color: var(--danger); font-weight: bold; }
+
+        /* Logs */
+        .log-area { margin-top: 2rem; }
+
+        #log-viewer {
+            background: #05070a;
+            color: #d1d5db;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
+            padding: 1.5rem;
+            border-radius: 1rem;
+            height: 400px;
+            overflow-y: auto;
+            font-size: 0.8125rem;
+            border: 1px solid #1e293b;
+            line-height: normal;
+        }
+
+        .log-line { margin-bottom: 0.25rem; }
+        .log-timestamp { color: #64748b; margin-right: 0.5rem; }
+        .log-level-INFO { color: var(--primary); }
+        .log-level-WARNING { color: #f59e0b; }
+        .log-level-ERROR { color: var(--danger); }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .charts-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo-area">
+                <div class="logo-text">Liquidity Hunter</div>
+                <div id="status-badge" class="status-badge">
+                    <div id="status-dot" class="status-dot"></div>
+                    <span id="status-text">INITIALIZING...</span>
+                </div>
+            </div>
+            <div id="last-update" style="color: var(--text-muted); font-size: 0.75rem;">Last update: —</div>
+        </header>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Balance</div>
+                <div id="stat-balance" class="stat-value">$0.00</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Daily P/L</div>
+                <div id="stat-daily-pnl" class="stat-value">$0.00</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Cumulative P/L</div>
+                <div id="stat-cum-pnl" class="stat-value">$0.00</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Win Rate</div>
+                <div id="stat-winrate" class="stat-value">0%</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Profit Factor</div>
+                <div id="stat-pf" class="stat-value">0.00</div>
+            </div>
+        </div>
+
+        <div class="charts-grid">
+            <div class="card">
+                <div class="card-header"><div class="card-title">EQUITY CURVE</div></div>
+                <canvas id="equityChart" height="150"></canvas>
+            </div>
+            <div class="card">
+                <div class="card-header"><div class="card-title">PER-PAIR PERFORMANCE</div></div>
+                <canvas id="pairChart" height="230"></canvas>
+            </div>
+        </div>
+
+        <div class="table-area">
+            <div class="card-header"><div class="card-title">ACTIVE POSITIONS</div></div>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>SYMBOL</th>
+                            <th>DIR</th>
+                            <th>LOT</th>
+                            <th>ENTRY</th>
+                            <th>SL</th>
+                            <th>TP</th>
+                            <th>RR</th>
+                            <th>STATUS</th>
+                        </tr>
+                    </thead>
+                    <tbody id="open-trades-body">
+                        <tr><td colspan="8" style="text-align: center; padding: 2rem;">Searching for signals...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="table-area">
+            <div class="card-header"><div class="card-title">TRADE HISTORY</div></div>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>CLOSED TIME</th>
+                            <th>SYMBOL</th>
+                            <th>DIR</th>
+                            <th>LOT</th>
+                            <th>ENTRY</th>
+                            <th>EXIT</th>
+                            <th>REASON</th>
+                            <th>P/L</th>
+                        </tr>
+                    </thead>
+                    <tbody id="closed-trades-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="log-area">
+            <div class="card-header"><div class="card-title">LIVE SYSTEM LOGS</div></div>
+            <div id="log-viewer"></div>
+        </div>
+    </div>
+
+    <script>
+        // Charts Initialization
+        let equityChart, pairChart;
+
+        function initCharts() {
+            const equityCtx = document.getElementById('equityChart').getContext('2d');
+            equityChart = new Chart(equityCtx, {
+                type: 'line',
+                data: { labels: [], datasets: [{ label: 'Cumulative P/L', borderColor: '#3b82f6', backgroundColor: 'rgba(59, 130, 246, 0.1)', data: [], fill: true, tension: 0.4 }] },
+                options: { 
+                    responsive: true, 
+                    plugins: { legend: { display: false } },
+                    scales: { 
+                        y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
+                        x: { display: false }
+                    }
+                }
+            });
+
+            const pairCtx = document.getElementById('pairChart').getContext('2d');
+            pairChart = new Chart(pairCtx, {
+                type: 'bar',
+                data: { labels: [], datasets: [{ data: [], backgroundColor: '#10b981' }] },
+                options: {
+                    responsive: true,
+                    indexAxis: 'y',
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
+                        y: { ticks: { color: '#94a3b8' } }
+                    }
+                }
+            });
+        }
+
+        async function updateDashboard() {
+            try {
+                // Status Update
+                const statusRes = await fetch('/api/status');
+                const status = await statusRes.json();
+                
+                const dot = document.getElementById('status-dot');
+                const text = document.getElementById('status-text');
+                const lastUpd = document.getElementById('last-update');
+
+                if (status.bot_running) {
+                    dot.className = 'status-dot active';
+                    text.innerText = 'RUNNING (' + status.mode + ')';
+                } else {
+                    dot.className = 'status-dot inactive';
+                    text.innerText = 'BOT STOPPED';
+                }
+                lastUpd.innerText = 'Last update: ' + new Date().toLocaleTimeString();
+
+                document.getElementById('stat-balance').innerText = '$' + status.account_balance.toLocaleString();
+                document.getElementById('stat-daily-pnl').innerText = '$' + status.daily_realized_pnl.toFixed(2);
+                document.getElementById('stat-daily-pnl').className = 'stat-value ' + (status.daily_realized_pnl >= 0 ? 'up' : 'down');
+                document.getElementById('stat-cum-pnl').innerText = '$' + status.cumulative_pnl.toFixed(2);
+                document.getElementById('stat-cum-pnl').className = 'stat-value ' + (status.cumulative_pnl >= 0 ? 'up' : 'down');
+
+                // Stats Update
+                const statsRes = await fetch('/api/stats');
+                const stats = await statsRes.json();
+                
+                document.getElementById('stat-winrate').innerText = stats.win_rate + '%';
+                document.getElementById('stat-pf').innerText = stats.profit_factor;
+
+                // Update Equity Chart
+                equityChart.data.labels = stats.equity_curve.map(e => e.time);
+                equityChart.data.datasets[0].data = stats.equity_curve.map(e => e.pnl);
+                equityChart.update();
+
+                // Update Pair Chart
+                const sortedPairs = Object.entries(stats.pair_stats).sort((a, b) => b[1].pnl - a[1].pnl);
+                pairChart.data.labels = sortedPairs.map(p => p[0]);
+                pairChart.data.datasets[0].data = sortedPairs.map(p => p[1].pnl);
+                pairChart.data.datasets[0].backgroundColor = sortedPairs.map(p => p[1].pnl >= 0 ? '#10b981' : '#ef4444');
+                pairChart.update();
+
+                // Open Trades
+                const openRes = await fetch('/api/trades/open');
+                const open = await openRes.json();
+                const openBody = document.getElementById('open-trades-body');
+                if (open.trades.length === 0) {
+                    openBody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding:2rem; color:var(--text-muted);">No open positions. Scanning symbols...</td></tr>';
+                } else {
+                    openBody.innerHTML = open.trades.map(t => `
+                        <tr>
+                            <td style="font-weight: 600">${t.symbol}</td>
+                            <td class="badge-${t.direction.toLowerCase()}">${t.direction}</td>
+                            <td>${t.lot_size}</td>
+                            <td>${t.entry_price.toFixed(5)}</td>
+                            <td>${t.stop_loss.toFixed(5)}</td>
+                            <td>${t.take_profit.toFixed(5)}</td>
+                            <td>1:${t.rr_ratio}</td>
+                            <td><span style="color: var(--accent)">ACTIVE</span></td>
+                        </tr>
+                    `).join('');
+                }
+
+                // Closed Trades
+                const closedRes = await fetch('/api/trades/closed?per_page=10');
+                const closed = await closedRes.json();
+                document.getElementById('closed-trades-body').innerHTML = closed.trades.map(t => `
+                    <tr>
+                        <td style="color: var(--text-muted)">${t.close_time.replace('T', ' ').substring(5, 16)}</td>
+                        <td>${t.symbol}</td>
+                        <td class="badge-${t.direction.toLowerCase()}">${t.direction}</td>
+                        <td>${t.lot_size}</td>
+                        <td>${t.entry_price.toFixed(5)}</td>
+                        <td>${t.close_price.toFixed(5)}</td>
+                        <td>${t.close_reason}</td>
+                        <td class="${t.pnl >=0 ? 'badge-buy' : 'badge-sell'}">${t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}</td>
+                    </tr>
+                `).join('');
+
+                // Logs
+                const logRes = await fetch('/api/logs?lines=20');
+                const logs = await logRes.json();
+                const logViewer = document.getElementById('log-viewer');
+                const atBottom = logViewer.scrollHeight - logViewer.scrollTop <= logViewer.clientHeight + 50;
+                
+                logViewer.innerHTML = logs.lines.map(line => {
+                    const match = line.match(/\[(.*?)\] (.*?) (.*?) (.*)/);
+                    if (match) {
+                        return `<div class="log-line"><span class="log-timestamp">${match[1]}</span><span class="log-level-${match[2]}">${match[2]}</span> <span>${match[4]}</span></div>`;
+                    }
+                    return `<div class="log-line">${line}</div>`;
+                }).join('');
+
+                if (atBottom) logViewer.scrollTop = logViewer.scrollHeight;
+
+            } catch (err) {
+                console.error('Update failed:', err);
+                document.getElementById('status-dot').className = 'status-dot inactive';
+                document.getElementById('status-text').innerText = 'OFFLINE / CONNECTION ERROR';
+            }
+        }
+
+        initCharts();
+        updateDashboard();
+        setInterval(updateDashboard, 10000);
+    </script>
+</body>
+</html>
